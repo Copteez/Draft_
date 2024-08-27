@@ -37,7 +37,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<Map<String, dynamic>> getForecast() async {
-    var cityName = "unknow";
+    var cityName = "here"; 
     var apiKey = "58619aef51181265b04347c2df10bd62a56995ef";
     var url = "api.waqi.info";
     var path = "/feed/$cityName/";
@@ -110,6 +110,7 @@ class _HomePageState extends State<HomePage> {
             }
           }
 
+          // Show a loading spinner
           return const Center(child: CircularProgressIndicator());
         },
       ),
