@@ -14,6 +14,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   late Future<Map<String, dynamic>> forecastData;
   Timer? _timer;
+  DateTime lastUpdated = DateTime.now();
 
   @override
   void initState() {
@@ -33,6 +34,7 @@ class _HomePageState extends State<HomePage> {
   void fetchForecast() {
     setState(() {
       forecastData = getForecast();
+      lastUpdated = DateTime.now();
     });
   }
 
@@ -97,10 +99,16 @@ class _HomePageState extends State<HomePage> {
               var formattedTime =
                   "${date.hour % 12}:${date.minute.toString().padLeft(2, '0')} ${date.hour >= 12 ? 'PM' : 'AM'}";
 
+              var minutesAgo = DateTime.now().difference(lastUpdated).inMinutes;
+
               return ListView(
                 padding: const EdgeInsets.all(16.0),
                 children: [
                   _buildAQIBox(city, formattedDate, formattedTime, aqi),
+                  const SizedBox(height: 20),
+                  _buildLastUpdated(minutesAgo),
+                  const SizedBox(height: 20),
+                  _build24HourPrediction(),
                   const SizedBox(height: 20),
                   _buildCurrentStatBox(iaqi),
                 ],
@@ -357,6 +365,121 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+
+  Widget _buildLastUpdated(int minutesAgo) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Text(
+        "Latested update $minutesAgo minutes ago",
+        style: TextStyle(color: Colors.black54, fontSize: 14),
+      ),
+    );
+  }
+
+ Widget _build24HourPrediction() {
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        "24 hours predict",
+        style: TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      SizedBox(height: 10),
+      Container(
+        height: 140, // box height
+        child: ListView.builder(
+          scrollDirection: Axis.horizontal,
+          itemCount: 23,
+          itemBuilder: (context, index) {
+            return _buildHourPredictionTile(index + 1); 
+          },
+        ),
+      ),
+    ],
+  );
+}
+
+Widget _buildHourPredictionTile(int hour) {
+  int aqi = Random().nextInt(500); // Random AQI for debug !!DELETE IN FUTURE!!
+  Color aqiColor;
+  String emoji;
+
+  if (aqi <= 50) {
+    aqiColor = Color(0xFFB5F379); 
+    emoji = "😊";
+  } else if (aqi <= 100) {
+    aqiColor = Color(0xFFFFF47E); 
+    emoji = "😐";
+  } else if (aqi <= 150) {
+    aqiColor = Color(0xFFFEB14E); 
+    emoji = "😷";
+  } else if (aqi <= 200) {
+    aqiColor = Color(0xFFFF6274); 
+    emoji = "🤢";
+  } else if (aqi <= 300) {
+    aqiColor = Color(0xFFB46EBC); 
+    emoji = "🤮";
+  } else {
+    aqiColor = Color(0xFF975174); 
+    emoji = "☠️";
+  }
+
+  return ConstrainedBox( 
+    constraints: BoxConstraints(
+      minHeight: 120, 
+      maxHeight: 120,
+    ),
+
+    child: Container(
+      width: 80, 
+      margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white, 
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black12,
+            blurRadius: 4,
+            spreadRadius: 2,
+          ),
+        ],
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            "$hour h",
+            style: TextStyle(color: Colors.black, fontSize: 12), 
+          ),
+          SizedBox(height: 6), 
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: aqiColor.withOpacity(0.8), 
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              "$aqi",
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 14, 
+              ),
+            ),
+          ),
+          SizedBox(height: 6), 
+          Text(
+            emoji,
+            style: TextStyle(fontSize: 20), 
+          ),
+        ],
+      ),
+    ),
+  );
+}
 
   String _getDayOfWeek(int weekday) {
     switch (weekday) {
