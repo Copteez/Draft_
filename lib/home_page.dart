@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:fl_chart/fl_chart.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -322,49 +323,100 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildCurrentStatBox(Map<String, dynamic> iaqi) {
-    return Container(
-      padding: const EdgeInsets.all(16.0),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(5),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 10,
-            spreadRadius: 1,
+// Main function to build the Current Stat box
+Widget _buildCurrentStatBox(Map<String, dynamic> iaqi) {
+  List<MapEntry<String, dynamic>> entries = iaqi.entries.toList();
+
+  return Container(
+    padding: const EdgeInsets.all(16.0),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(5),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black12,
+          blurRadius: 10,
+          spreadRadius: 1,
+        ),
+      ],
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          "Current Stat",
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        SizedBox(height: 8),
+        Divider(color: Colors.grey),
+        SizedBox(height: 16),
+
+        GridView.builder(
+          physics: NeverScrollableScrollPhysics(),
+          shrinkWrap: true,
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2, 
+            crossAxisSpacing: 16.0, 
+            mainAxisSpacing: 16.0, 
+            childAspectRatio: 4, 
           ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+          itemCount: entries.length,
+          itemBuilder: (context, index) {
+            var entry = entries[index];
+            return _buildStatTile(entry.key, entry.value['v']);
+          },
+        ),
+      ],
+    ),
+  );
+}
+
+Widget _buildStatTile(String statName, double value) {
+  Color barColor = Color(0xFF77A1C9); 
+
+  double barWidthFactor = (value / 100.0).clamp(0.0, 1.0); 
+
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(
-            "Current stat",
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            statName.toUpperCase(), 
+            style: TextStyle(fontSize: 16, color: Colors.grey),
           ),
-          SizedBox(height: 8),
-          Divider(color: Colors.grey),
-          Column(
-            children: iaqi.entries.map((entry) {
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text("${entry.key.toUpperCase()}",
-                        style: TextStyle(fontSize: 16, color: Colors.grey)),
-                    Text("${entry.value['v']}",
-                        style: TextStyle(fontSize: 16)),
-                  ],
-                ),
-              );
-            }).toList(),
+          Text(
+            value.toStringAsFixed(2), 
+            style: TextStyle(fontSize: 16, color: Colors.black),
           ),
         ],
       ),
-    );
-  }
+      SizedBox(height: 4),
+      // Bar for the value
+      Container(
+        height: 2,
+        width: double.infinity,
+        color: Colors.grey[300], 
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: FractionallySizedBox(
+            widthFactor: barWidthFactor, 
+            child: Container(
+              height: 2,
+              color: barColor, 
+            ),
+          ),
+        ),
+      ),
+      SizedBox(height: 4),
+      Text(
+        "Good", 
+        style: TextStyle(color: Colors.grey, fontSize: 12),
+      ),
+    ],
+  );
+}
 
   Widget _buildLastUpdated(int minutesAgo) {
     return Align(
@@ -376,30 +428,93 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
- Widget _build24HourPrediction() {
+Widget _build24HourPrediction() {
   return Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       Text(
-        "24 hours predict",
+        "24 Hour Prediction",
         style: TextStyle(
           fontSize: 18,
           fontWeight: FontWeight.bold,
         ),
       ),
-      SizedBox(height: 10),
+      SizedBox(height: 20),
       Container(
-        height: 140, // box height
-        child: ListView.builder(
-          scrollDirection: Axis.horizontal,
-          itemCount: 23,
-          itemBuilder: (context, index) {
-            return _buildHourPredictionTile(index + 1); 
-          },
+        height: 300,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal, 
+          child: Container(
+            width: 24 * 75.0, 
+            child: BarChart(
+              BarChartData(
+                alignment: BarChartAlignment.spaceEvenly,
+                maxY: 500, 
+                minY: 0,
+                barGroups: _generatePredictionBarGroups(
+                  List<double>.generate(24, (index) => Random().nextDouble() * 500), 
+                ),
+                titlesData: FlTitlesData(
+                  leftTitles: SideTitles(showTitles: false), 
+                  rightTitles: SideTitles(showTitles: false),
+                  topTitles: SideTitles(showTitles: false),
+                  bottomTitles: SideTitles(
+                    showTitles: true, 
+                    getTitles: (value) {
+                      int hour = value.toInt();
+                      return '$hour h';
+                    },
+                    getTextStyles: (context, value) =>
+                        TextStyle(color: Colors.grey, fontSize: 12),
+                    interval: 1, 
+                  ),
+                ),
+                gridData: FlGridData(
+                  show: false, 
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     ],
   );
+}
+
+List<BarChartGroupData> _generatePredictionBarGroups(List<double> predictionData) {
+  List<BarChartGroupData> barGroups = [];
+  for (int i = 0; i < predictionData.length; i++) {
+    double aqi = predictionData[i];
+    barGroups.add(
+      BarChartGroupData(
+        x: i,
+        barRods: [
+          BarChartRodData(
+            y: aqi, 
+            colors: [_getAQIColor(aqi)], 
+            width: 20, 
+          ),
+        ],
+      ),
+    );
+  }
+  return barGroups;
+}
+
+Color _getAQIColor(double aqi) {
+  if (aqi <= 50) {
+    return Color(0xFFB5F379); // Green for good
+  } else if (aqi <= 100) {
+    return Color(0xFFFFF47E); // Yellow for moderate
+  } else if (aqi <= 150) {
+    return Color(0xFFFEB14E); // Orange for unhealthy for sensitive groups
+  } else if (aqi <= 200) {
+    return Color(0xFFFF6274); // Red for unhealthy
+  } else if (aqi <= 300) {
+    return Color(0xFFB46EBC); // Purple for very unhealthy
+  } else {
+    return Color(0xFF975174); // Maroon for hazardous
+  }
 }
 
 Widget _buildHourPredictionTile(int hour) {
