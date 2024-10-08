@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:fl_chart/fl_chart.dart';
+import 'package:geolocator/geolocator.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -39,25 +40,59 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  Future<Map<String, dynamic>> getForecast() async {
-    var cityName = "here"; 
-    var apiKey = "58619aef51181265b04347c2df10bd62a56995ef";
-    var url = "api.waqi.info";
-    var path = "/feed/$cityName/";
-    var params = {"token": apiKey};
-    var uri = Uri.https(url, path, params);
-    var response = await http.get(uri);
+Future<Map<String, dynamic>> getForecast() async {
+  // Get user's current location
+  Position userLocation = await _determinePosition();
+  double latitude = userLocation.latitude;
+  double longitude = userLocation.longitude;
 
-    if (response.statusCode == 200) {
-      var jsonData = jsonDecode(response.body);
-      var aqi = jsonData['data']['aqi'];
-      var city = jsonData['data']['city']['name'];
-      var iaqi = jsonData['data']['iaqi'];
-      return {'aqi': aqi, 'city': city, 'iaqi': iaqi};
-    } else {
-      throw Exception("Failed to load forecast data");
+  var apiKey = "58619aef51181265b04347c2df10bd62a56995ef";
+  var url = "api.waqi.info";
+  var path = "/feed/geo:$latitude;$longitude/";
+  var params = {"token": apiKey};
+  var uri = Uri.https(url, path, params);
+  var response = await http.get(uri);
+
+  if (response.statusCode == 200) {
+    var jsonData = jsonDecode(response.body);
+    var aqi = jsonData['data']['aqi'];
+    var city = jsonData['data']['city']['name'];
+    var iaqi = jsonData['data']['iaqi'];
+
+    return {'aqi': aqi, 'city': city, 'iaqi': iaqi};
+  } else {
+    throw Exception("Failed to load forecast data");
+  }
+}
+
+// Function to request location permission and get user's current position
+Future<Position> _determinePosition() async {
+  bool serviceEnabled;
+  LocationPermission permission;
+
+  // Check if location services are enabled
+  serviceEnabled = await Geolocator.isLocationServiceEnabled();
+  if (!serviceEnabled) {
+    return Future.error('Location services are disabled.');
+  }
+
+  // Check for location permissions
+  permission = await Geolocator.checkPermission();
+  if (permission == LocationPermission.denied) {
+    permission = await Geolocator.requestPermission();
+    if (permission == LocationPermission.denied) {
+      return Future.error('Location permissions are denied.');
     }
   }
+
+  if (permission == LocationPermission.deniedForever) {
+    return Future.error('Location permissions are permanently denied, we cannot request permissions.');
+  }
+
+  // When permissions are granted, get the current position
+  return await Geolocator.getCurrentPosition();
+}
+
 
   @override
   Widget build(BuildContext context) {
