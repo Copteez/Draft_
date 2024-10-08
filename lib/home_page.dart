@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:fl_chart/fl_chart.dart';
 import 'package:geolocator/geolocator.dart';
+import 'map.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -156,31 +157,43 @@ Future<Position> _determinePosition() async {
         },
       ),
       bottomNavigationBar: BottomNavigationBar(
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.home),
-            label: 'Home',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.map),
-            label: 'Map',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.directions),
-            label: 'Path Finder',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.settings),
-            label: 'Setting',
-          ),
-        ],
-        currentIndex: 0,
-        selectedItemColor: Color(0xFF77A1C9),
-        unselectedItemColor: Colors.grey,
-        onTap: (index) {
-          // future tab nav functions
-        },
-      ),
+  items: const [
+    BottomNavigationBarItem(
+      icon: Icon(Icons.home),
+      label: 'Home',
+    ),
+    BottomNavigationBarItem(
+      icon: Icon(Icons.map),
+      label: 'Map',
+    ),
+    BottomNavigationBarItem(
+      icon: Icon(Icons.directions),
+      label: 'Path Finder',
+    ),
+    BottomNavigationBarItem(
+      icon: Icon(Icons.settings),
+      label: 'Setting',
+    ),
+  ],
+  currentIndex: 0, // Default selected tab (0 is Home)
+  selectedItemColor: Color(0xFF77A1C9),
+  unselectedItemColor: Colors.grey,
+  onTap: (index) {
+    if (index == 1) {
+      // Navigate to the MapPage when the Map tab is tapped
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (context) => MapPage()),
+      );
+    } else if (index == 0) {
+      // Home tab tapped (no action needed if you're already on the home screen)
+    } else if (index == 2) {
+      // Handle Path Finder tab tap
+    } else if (index == 3) {
+      // Handle Settings tab tap
+    }
+  },
+),
     );
   }
 

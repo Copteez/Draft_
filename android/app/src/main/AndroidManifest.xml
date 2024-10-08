@@ -1,7 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
-
+    
     <application
         android:label="api_test"
         android:name="${applicationName}"
@@ -22,6 +22,8 @@
             <meta-data
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
+              android:name="com.google.android.geo.API_KEY"
+              android:value="AIzaSyD9uJEBY4FZ1T2wBCj3oVTsIW5dDbWv0G0"/>
               />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
