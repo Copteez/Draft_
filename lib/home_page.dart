@@ -41,7 +41,7 @@ class _HomePageState extends State<HomePage> {
   }
 
 Future<Map<String, dynamic>> getForecast() async {
-  // Get user's current location
+  //current location
   Position userLocation = await _determinePosition();
   double latitude = userLocation.latitude;
   double longitude = userLocation.longitude;
@@ -65,31 +65,28 @@ Future<Map<String, dynamic>> getForecast() async {
   }
 }
 
-// Function to request location permission and get user's current position
+//location permission
 Future<Position> _determinePosition() async {
   bool serviceEnabled;
   LocationPermission permission;
 
-  // Check if location services are enabled
   serviceEnabled = await Geolocator.isLocationServiceEnabled();
   if (!serviceEnabled) {
     return Future.error('Location services are disabled.');
   }
 
-  // Check for location permissions
   permission = await Geolocator.checkPermission();
   if (permission == LocationPermission.denied) {
     permission = await Geolocator.requestPermission();
     if (permission == LocationPermission.denied) {
-      return Future.error('Location permissions are denied.');
+      return Future.error('permissions denied');
     }
   }
 
   if (permission == LocationPermission.deniedForever) {
-    return Future.error('Location permissions are permanently denied, we cannot request permissions.');
+    return Future.error('permissions denied, cant request permissions');
   }
 
-  // When permissions are granted, get the current position
   return await Geolocator.getCurrentPosition();
 }
 
