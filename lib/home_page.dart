@@ -164,15 +164,11 @@ Future<Position> _determinePosition() async {
     ),
     BottomNavigationBarItem(
       icon: Icon(Icons.map),
-      label: 'Map',
-    ),
-    BottomNavigationBarItem(
-      icon: Icon(Icons.directions),
-      label: 'Path Finder',
+      label: 'Map & Path Finder', // Updated label
     ),
     BottomNavigationBarItem(
       icon: Icon(Icons.settings),
-      label: 'Setting',
+      label: 'Settings',
     ),
   ],
   currentIndex: 0, // Default selected tab (0 is Home)
@@ -180,17 +176,15 @@ Future<Position> _determinePosition() async {
   unselectedItemColor: Colors.grey,
   onTap: (index) {
     if (index == 1) {
-      // Navigate to the MapPage when the Map tab is tapped
+      // Map and Path Finder combined
       Navigator.push(
         context,
         MaterialPageRoute(builder: (context) => MapPage()),
       );
     } else if (index == 0) {
-      // Home tab tapped (no action needed if you're already on the home screen)
+      // Home (No action)
     } else if (index == 2) {
-      // Handle Path Finder tab tap
-    } else if (index == 3) {
-      // Handle Settings tab tap
+      // Settings (Future implementation)
     }
   },
 ),
@@ -474,6 +468,9 @@ Widget _buildStatTile(String statName, double value) {
   }
 
 Widget _build24HourPrediction() {
+  // Generate random AQI values for demonstration.
+  List<double> predictedAQI = List.generate(24, (index) => Random().nextDouble() * 500);
+
   return Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
@@ -485,38 +482,37 @@ Widget _build24HourPrediction() {
         ),
       ),
       SizedBox(height: 20),
+      // Scrollable container for the line chart
       Container(
         height: 300,
         child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal, 
+          scrollDirection: Axis.horizontal,
           child: Container(
-            width: 24 * 75.0, 
-            child: BarChart(
-              BarChartData(
-                alignment: BarChartAlignment.spaceEvenly,
-                maxY: 500, 
-                minY: 0,
-                barGroups: _generatePredictionBarGroups(
-                  List<double>.generate(24, (index) => Random().nextDouble() * 500), 
-                ),
+            width: 24 * 50.0, // Adjusted to make scrolling smoother
+            child: LineChart(
+              LineChartData(
+                gridData: FlGridData(show: true), // Show light grid for guidance
                 titlesData: FlTitlesData(
-                  leftTitles: SideTitles(showTitles: false), 
-                  rightTitles: SideTitles(showTitles: false),
-                  topTitles: SideTitles(showTitles: false),
+                  leftTitles: SideTitles(
+                    showTitles: true,
+                    getTextStyles: (context, value) =>
+                        TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
                   bottomTitles: SideTitles(
-                    showTitles: true, 
+                    showTitles: true,
                     getTitles: (value) {
                       int hour = value.toInt();
                       return '$hour h';
                     },
                     getTextStyles: (context, value) =>
                         TextStyle(color: Colors.grey, fontSize: 12),
-                    interval: 1, 
+                    interval: 1,
                   ),
                 ),
-                gridData: FlGridData(
-                  show: false, 
-                ),
+                borderData: FlBorderData(show: true),
+                minY: 0,
+                maxY: 500,
+                lineBarsData: _generateLineSegments(predictedAQI),
               ),
             ),
           ),
@@ -524,6 +520,36 @@ Widget _build24HourPrediction() {
       ),
     ],
   );
+}
+
+// Generate line segments with colored lines and visible dots for each hour
+List<LineChartBarData> _generateLineSegments(List<double> values) {
+  List<LineChartBarData> segments = [];
+
+  for (int i = 0; i < values.length - 1; i++) {
+    segments.add(
+      LineChartBarData(
+        spots: [
+          FlSpot(i.toDouble(), values[i]),
+          FlSpot((i + 1).toDouble(), values[i + 1]),
+        ],
+        isCurved: false, // Straight lines between points
+        colors: [_getAQIColor((values[i] + values[i + 1]) / 2)], // Color based on average AQI
+        barWidth: 4,
+        dotData: FlDotData( // Add dots at each data point
+          show: true,
+          getDotPainter: (spot, percent, barData, index) => FlDotCirclePainter(
+            radius: 6,
+            color: Colors.white,
+            strokeWidth: 2,
+            strokeColor: _getAQIColor(spot.y),
+          ),
+        ),
+        belowBarData: BarAreaData(show: false), // Disable area shading
+      ),
+    );
+  }
+  return segments;
 }
 
 List<BarChartGroupData> _generatePredictionBarGroups(List<double> predictionData) {
