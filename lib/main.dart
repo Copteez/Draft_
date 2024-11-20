@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
-import 'home_page.dart';
+import 'home_page.dart'; // Verify this path is correct and matches the filename exactly, considering case sensitivity
 
 void main() {
   runApp(const MyApp());
@@ -16,7 +16,11 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
       ),
-      home: const LoadingScreen(),
+      initialRoute: '/',
+      routes: {
+        '/': (context) => const HomePage(),
+        '/home': (context) => const HomePage(),
+      },
     );
   }
 }
@@ -36,7 +40,7 @@ class _LoadingScreenState extends State<LoadingScreen>
   void initState() {
     super.initState();
     _controller = AnimationController(
-      duration: const Duration(seconds: 2),  // Animation time reduced to 2 seconds
+      duration: const Duration(seconds: 2), // Animation time reduced to 2 seconds
       vsync: this,
     )..addListener(() {
         setState(() {});
@@ -45,8 +49,7 @@ class _LoadingScreenState extends State<LoadingScreen>
 
     // Automatically navigate to HomePage after 2 seconds
     Timer(const Duration(seconds: 2), () {
-      Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => const HomePage()));
+      Navigator.of(context).pushReplacementNamed('/home');
     });
   }
 
@@ -73,12 +76,12 @@ class _LoadingScreenState extends State<LoadingScreen>
                 ),
                 Icon(
                   Icons.air,
-                  size: 60,  // Increase the size of the air symbol
+                  size: 60, // Increase the size of the air symbol
                   color: Colors.white,
                 ),
               ],
             ),
-            const SizedBox(height: 20),  // Add some spacing below the circle
+            const SizedBox(height: 20), // Add some spacing below the circle
             Text(
               "Loading",
               style: TextStyle(
