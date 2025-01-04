@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'home_page.dart'; // Verify this path is correct and matches the filename exactly, considering case sensitivity
+import 'package:flutter_dotenv/flutter_dotenv.dart'; // Import dotenv
 
-void main() {
+void main() async{
+  // Ensure Flutter bindings are initialized
+  WidgetsFlutterBinding.ensureInitialized();
+  // Load the .env file
+  await dotenv.load(fileName: '.env');
   runApp(const MyApp());
 }
 

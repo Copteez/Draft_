@@ -192,8 +192,7 @@ class _DetailsPageState extends State<DetailsPage> {
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 2,
               crossAxisSpacing: 16.0,
-              mainAxisSpacing: 16.0,
-              childAspectRatio: 4,
+              childAspectRatio: 3,
             ),
             itemCount: entries.length,
             itemBuilder: (context, index) {
@@ -466,16 +465,8 @@ class _DetailsPageState extends State<DetailsPage> {
 
   Widget _buildMinimal24HourPrediction() {
     List<String> labels = [
-      "8 AM",
-      "9 AM",
-      "10 AM",
-      "11 AM",
-      "12 PM",
-      "1 PM",
-      "2 PM",
-      "3 PM",
-      "4 PM",
-      "5 PM",
+      "8 AM", "9 AM", "10 AM", "11 AM", "12 PM",
+      "1 PM", "2 PM", "3 PM", "4 PM", "5 PM",
     ];
     List<double> aqiValues = [60, 80, 100, 90, 110, 120, 130, 150, 160, 170];
     List<double> pm25Values = [30, 40, 50, 40, 45, 50, 55, 60, 65, 70];
@@ -491,7 +482,7 @@ class _DetailsPageState extends State<DetailsPage> {
         _buildLegend(),
         SizedBox(height: 20),
         Container(
-          height: 200, // Adjusted height to match the homepage
+          height: 300,
           child: LineChart(
             LineChartData(
               gridData: FlGridData(
@@ -531,6 +522,8 @@ class _DetailsPageState extends State<DetailsPage> {
                         : '';
                   },
                 ),
+                // Hide the right titles
+                rightTitles: SideTitles(showTitles: false),
               ),
               borderData: FlBorderData(
                 show: true,
@@ -560,6 +553,7 @@ class _DetailsPageState extends State<DetailsPage> {
               ),
             ),
           ),
+
         ),
       ],
     );
@@ -579,9 +573,9 @@ class _DetailsPageState extends State<DetailsPage> {
       "Day 10",
     ];
     List<double> aqiValues =
-        List.generate(10, (index) => Random().nextDouble() * 200);
+    List.generate(10, (index) => Random().nextDouble() * 200);
     List<double> pm25Values =
-        List.generate(10, (index) => Random().nextDouble() * 150);
+    List.generate(10, (index) => Random().nextDouble() * 150);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -634,6 +628,7 @@ class _DetailsPageState extends State<DetailsPage> {
                         : '';
                   },
                 ),
+                rightTitles: SideTitles(showTitles: false),  // Disable the right side titles
               ),
               borderData: FlBorderData(
                 show: true,
@@ -667,6 +662,7 @@ class _DetailsPageState extends State<DetailsPage> {
       ],
     );
   }
+
 
   Widget _buildLegend() {
     return Row(

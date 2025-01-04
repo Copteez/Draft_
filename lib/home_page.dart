@@ -25,7 +25,7 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     fetchForecast();
-    _timer = Timer.periodic(Duration(minutes: 1), (timer) {
+    _timer = Timer.periodic(Duration(minutes: 30), (timer) {
       fetchForecast();
     });
   }
@@ -43,24 +43,30 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<Forecast> getForecast() async {
-    Position userLocation = await _determinePosition();
-    double latitude = userLocation.latitude;
-    double longitude = userLocation.longitude;
+    try {
+      Position userLocation = await _determinePosition();
+      double latitude = userLocation.latitude;
+      double longitude = userLocation.longitude;
 
-    var apiKey = "58619aef51181265b04347c2df10bd62a56995ef";
-    var url = "api.waqi.info";
-    var path = "/feed/geo:$latitude;$longitude/";
-    var params = {"token": apiKey};
-    var uri = Uri.https(url, path, params);
-    var response = await http.get(uri);
+      var apiKey = "58619aef51181265b04347c2df10bd62a56995ef";
+      var url = "api.waqi.info";
+      var path = "/feed/geo:$latitude;$longitude/";
+      var params = {"token": apiKey};
+      var uri = Uri.https(url, path, params);
 
-    if (response.statusCode == 200) {
-      var jsonData = jsonDecode(response.body);
-      return Forecast.fromJson(jsonData);
-    } else {
-      throw Exception("Failed to load forecast data");
+      var response = await http.get(uri);
+
+      if (response.statusCode == 200) {
+        var jsonData = jsonDecode(response.body);
+        return Forecast.fromJson(jsonData);
+      } else {
+        throw Exception("Failed to load forecast data");
+      }
+    } catch (e) {
+      throw Exception("Error fetching data: $e");
     }
   }
+
 
   Future<Position> _determinePosition() async {
     bool serviceEnabled;
@@ -235,6 +241,8 @@ class _HomePageState extends State<HomePage> {
                         : '';
                   },
                 ),
+                // Hide the right titles
+                rightTitles: SideTitles(showTitles: false),
               ),
               borderData: FlBorderData(
                 show: true,
@@ -255,7 +263,7 @@ class _HomePageState extends State<HomePage> {
                   getTooltipItems: (touchedSpots) {
                     return touchedSpots.map((LineBarSpot touchedSpot) {
                       return LineTooltipItem(
-                        '\${touchedSpot.barIndex == 0 ? "AQI" : "PM2.5"}: \${touchedSpot.y.toInt()}',
+                        '${touchedSpot.barIndex == 0 ? "AQI" : "PM2.5"}: ${touchedSpot.y.toInt()}',
                         const TextStyle(color: Colors.white),
                       );
                     }).toList();
@@ -264,6 +272,7 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
           ),
+
         ),
       ],
     );
@@ -464,13 +473,12 @@ class _HomePageState extends State<HomePage> {
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 2,
               crossAxisSpacing: 16.0,
-              mainAxisSpacing: 16.0,
-              childAspectRatio: 4,
+              childAspectRatio: 3,
             ),
             itemCount: entries.length,
             itemBuilder: (context, index) {
               var entry = entries[index];
-              return _buildStatTile(entry.key, entry.value['v']);
+              return _buildStatTile(entry.key, (entry.value['v'] as num).toDouble());
             },
           ),
         ],
@@ -685,44 +693,46 @@ class _HomePageState extends State<HomePage> {
         barWidthFactor = 0.0;
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              fullName,
-              style: TextStyle(fontSize: 16, color: Colors.grey),
-            ),
-            Text(
-              value?.toStringAsFixed(2) ?? 'No data',
-              style: TextStyle(fontSize: 16, color: Colors.black),
-            ),
-          ],
-        ),
-        SizedBox(height: 4),
-        Container(
-          height: 2,
-          width: double.infinity,
-          color: Colors.grey[300],
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: FractionallySizedBox(
-              widthFactor: barWidthFactor,
-              child: Container(
-                height: 2,
-                color: barColor,
+    return SingleChildScrollView(// Wrap the entire Column in a scrollable view
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                fullName,
+                style: TextStyle(fontSize: 16, color: Colors.grey),
+              ),
+              Text(
+                value?.toStringAsFixed(2) ?? 'No data',
+                style: TextStyle(fontSize: 16, color: Colors.black),
+              ),
+            ],
+          ),
+          SizedBox(height: 2),
+          Container(
+            height: 2,  // Height of the bar
+            width: double.infinity,
+            color: Colors.grey[300],
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: FractionallySizedBox(
+                widthFactor: (barWidthFactor != null && barWidthFactor >= 0) ? barWidthFactor : 0.0,
+                child: Container(
+                  height: 2,
+                  color: barColor,
+                ),
               ),
             ),
           ),
-        ),
-        SizedBox(height: 4),
-        Text(
-          condition,
-          style: TextStyle(color: Colors.grey, fontSize: 12),
-        ),
-      ],
+          SizedBox(height: 2),
+          Text(
+            condition,
+            style: TextStyle(color: Colors.grey, fontSize: 12),
+          ),
+        ],
+      ),
     );
   }
 
