@@ -7,7 +7,6 @@ import 'package:http/http.dart' as http;
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:geocoding/geocoding.dart';
-import 'getroute.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 
 class MapPage extends StatefulWidget {
@@ -23,13 +22,16 @@ class _MapPageState extends State<MapPage> {
   List<LatLng> polylineCoordinates = [];
   PolylinePoints polylinePoints = PolylinePoints();
 
+  List<Map<String, dynamic>> _autocompleteResults = [];
+  bool _isSearching = false;
+
+  LatLng? _selectedLocation;
   LatLng? _currentLocation;
-  LatLng? _endLocation;
+
   final String _waqiApiKey = dotenv.env['WAQIAPIKEY'] ?? 'default_value';
   Map<String, dynamic>? _selectedStation;
 
   final TextEditingController _searchController = TextEditingController();
-  List<String> _locationSuggestions = [];
   String _selectedMode = 'driving';
 
   // Initial position (default location until we get the user's location)
@@ -51,34 +53,53 @@ class _MapPageState extends State<MapPage> {
       appBar: AppBar(title: const Text('Map & AQI Stations')),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                labelText: 'Enter destination',
-                suffixIcon: IconButton(
-                  icon: Icon(Icons.search),
-                  onPressed: () {
-                    _updateEndLocation(_searchController.text);
-                    _updateCameraPosition();
-                    _markers.add(
-                        Marker(
-                      markerId: MarkerId('Destination_Location'),
-                      position: _endLocation!,
-                      infoWindow: InfoWindow(title: 'END_Location'),
-                      icon: BitmapDescriptor.defaultMarker,
-                    ));
-                    _getPolyline();
-                    _searchController.clear();
-                  },
-                ),
+          TextField(
+            controller: _searchController,
+            onChanged: (value) => _fetchAutocompleteSuggestions(value),
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: Colors.white,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8.0),
+                borderSide: BorderSide.none,
               ),
-              onChanged: (value) {
-                _fetchSuggestions(value); // Fetch suggestions based on user input
-              },
+              hintText: 'Search for location',
+              prefixIcon: Icon(Icons.search),
+              suffixIcon: IconButton(
+                icon: Icon(Icons.clear),
+                onPressed: () {
+                  _searchController.clear();
+                },
+              ),
             ),
           ),
+          if (_isSearching)
+            Container(
+              color: Colors.white,
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: _autocompleteResults.length,
+                itemBuilder: (context, index) {
+                  final result = _autocompleteResults[index];
+                  return ListTile(
+                    title: Text(result['description']),
+                    onTap: () async {
+                      await _selectLocation(result['place_id']);
+                      _updateEndLocation(_searchController.text);
+                      _updateCameraPosition();
+                      _markers.add(
+                          Marker(
+                            markerId: MarkerId('Destination_Location'),
+                            position: _selectedLocation!,
+                            infoWindow: InfoWindow(title: 'END_Location'),
+                            icon: BitmapDescriptor.defaultMarker,
+                          ));
+                      _getPolyline();
+                    },
+                  );
+                },
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8.0),
             child: DropdownButton<String>(
@@ -187,6 +208,38 @@ class _MapPageState extends State<MapPage> {
       }
     }
   }
+
+  Future<int> _getAQI(double lat, double lng) async {
+    final url = Uri.https('api.waqi.info',
+      '/feed/geo:$lat;$lng/',
+      {'token': _waqiApiKey},
+    );
+    print("LAT: $lat, LNG: $lng");
+
+    try {
+      final response = await http.get(url);
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+
+        // Accessing 'data' and then the 'aqi' value
+        if (data['status'] == 'ok' && data['data'] != null) {
+          final aqi = data['data']['aqi']; //
+          return aqi;
+        } else {
+          throw Exception('Failed to retrieve AQI data or invalid data format');
+        }
+      } else {
+        throw Exception("Failed to load AQI data: ${response.statusCode}");
+      }
+    } catch (e) {
+      print('Error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error loading AQI data.")));
+      }
+    }
+    return -1; // Return -1 on error
+  }
+
 
   void _populateMarkers(List<dynamic> stations) async {
     Set<Marker> markers = {};
@@ -306,13 +359,12 @@ class _MapPageState extends State<MapPage> {
     return Colors.brown;
   }
 
-
   Future<void> _updateEndLocation(String query) async {
     try {
       final List<Location> locations = await locationFromAddress(query);
       if (locations.isNotEmpty) {
         setState(() {
-          _endLocation = LatLng(locations[0].latitude, locations[0].longitude);
+          _selectedLocation = LatLng(locations[0].latitude, locations[0].longitude);
         });
         // _getRoute();
       }
@@ -359,25 +411,38 @@ class _MapPageState extends State<MapPage> {
     }
     return points;
   }
-// Function to add polyline to the map
-  void _addPolyline(List<LatLng> points) {
-    PolylineId id = PolylineId("polyline_${DateTime.now().millisecondsSinceEpoch}");
-    Polyline polyline = Polyline(
-      polylineId: id,
-      color: Colors.blue, // You can use different colors for different routes
-      points: points,
-      width: 5,
-    );
 
-    setState(() {
-      polylines[id] = polyline;
-    });
+
+// Function to add polyline to the map
+  Future<void> _addPolyline(List<LatLng> points) async {
+    final tenPercentofRoute = getTenPercent(points.length);
+    for (int i = tenPercentofRoute;i<points.length;i = i + tenPercentofRoute){
+      PolylineId id = PolylineId("polyline_${DateTime.now().millisecondsSinceEpoch}");
+      Color aqiColor = _getAQIColor(await _getAQI(points[i].latitude,points[i].longitude));
+      // print("Point lenght: ${points.length}");
+      Polyline polyline = Polyline(
+        polylineId: id,
+        width: 5,
+        color: aqiColor,
+        points: [points[i-tenPercentofRoute], points[i]],
+      );
+
+      setState(() {
+        polylines[id] = polyline;
+      });
+
+    }
   }
+
+  int getTenPercent(int number) {
+    return (number * 10) ~/ 100;
+  }
+
 
   _getPolyline() async {
     final String apiKey = dotenv.env['GOOGLE_API'] ?? 'API key not found';
     final origin = _currentLocation!;
-    final destination = _endLocation!;
+    final destination = _selectedLocation!;
 
     // Prepare the URL to fetch the directions from Google Maps API with multiple alternatives
     final url = Uri.https('maps.googleapis.com', '/maps/api/directions/json', {
@@ -411,7 +476,7 @@ class _MapPageState extends State<MapPage> {
           }
 
           // Create a new polyline for this route
-          _addPolyline(points);
+          await _addPolyline(points);
         }
       } else {
         throw Exception("Failed to fetch routes");
@@ -422,55 +487,90 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  Future<void> _fetchSuggestions(String query) async {
+  Future<void> _fetchAutocompleteSuggestions(String query) async {
+    if (query.isEmpty) {
+      setState(() {
+        _autocompleteResults.clear();
+        _isSearching = false;
+      });
+      return;
+    }
+
+    final String apiKey = dotenv.env['GOOGLE_API'] ?? 'API_KEY_NOT_SET';
+    final url = Uri.https('maps.googleapis.com', '/maps/api/place/autocomplete/json', {
+      'input': query,
+      'key': apiKey,
+      'location': '${_currentLocation?.latitude},${_currentLocation?.longitude}',
+      'radius': '50000', // 50 km search radius
+    });
+
     try {
-      if (query.isNotEmpty) {
-        List<Location> locations = await locationFromAddress(query);
-
-        if (locations.isEmpty) {
-          print('No locations found for query: $query');
-          setState(() => _locationSuggestions.clear());
-          return;
-        }
-
-        List<String> addresses = [];
-        for (var location in locations) {
-          List<Placemark> placemarks = await placemarkFromCoordinates(location.latitude, location.longitude);
-          if (placemarks.isNotEmpty) {
-            String address = '${placemarks.first.name}, ${placemarks.first.locality}, ${placemarks.first.country}';
-            addresses.add(address);
-          }
-        }
-
+      final response = await http.get(url);
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
         setState(() {
-          _locationSuggestions = addresses.isNotEmpty ? addresses : [];
+          _autocompleteResults = List<Map<String, dynamic>>.from(data['predictions']);
+          _isSearching = true;
         });
-      } else {
-        setState(() => _locationSuggestions.clear());
       }
     } catch (e) {
-      print('Error fetching location suggestions: $e');
+      print('Error fetching autocomplete: $e');
+      setState(() => _isSearching = false);
+    }
+  }
+
+  // Select location and show a marker
+  Future<void> _selectLocation(String placeId) async {
+    setState(() => _isSearching = false);
+
+    final String apiKey = dotenv.env['GOOGLE_API'] ?? 'API_KEY_NOT_SET';
+    final url = Uri.https('maps.googleapis.com', '/maps/api/place/details/json', {
+      'place_id': placeId,
+      'key': apiKey,
+    });
+
+    try {
+      final response = await http.get(url);
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body)['result'];
+        final double lat = data['geometry']['location']['lat'];
+        final double lng = data['geometry']['location']['lng'];
+        final LatLng location = LatLng(lat, lng);
+
+        setState(() {
+          _selectedLocation = location;
+          _markers.add(
+            Marker(
+              markerId: MarkerId('selectedLocation'),
+              position: location,
+              infoWindow: InfoWindow(title: data['name']),
+            ),
+          );
+        });
+      }
+    } catch (e) {
+      print('Error fetching place details: $e');
     }
   }
 
   void _updateCameraPosition() {
-    if (_currentLocation != null && _endLocation != null) {
+    if (_currentLocation != null && _selectedLocation != null) {
       LatLngBounds bounds = LatLngBounds(
         southwest: LatLng(
-          _currentLocation!.latitude < _endLocation!.latitude
+          _currentLocation!.latitude < _selectedLocation!.latitude
               ? _currentLocation!.latitude
-              : _endLocation!.latitude,
-          _currentLocation!.longitude < _endLocation!.longitude
+              : _selectedLocation!.latitude,
+          _currentLocation!.longitude < _selectedLocation!.longitude
               ? _currentLocation!.longitude
-              : _endLocation!.longitude,
+              : _selectedLocation!.longitude,
         ),
         northeast: LatLng(
-          _currentLocation!.latitude > _endLocation!.latitude
+          _currentLocation!.latitude > _selectedLocation!.latitude
               ? _currentLocation!.latitude
-              : _endLocation!.latitude,
-          _currentLocation!.longitude > _endLocation!.longitude
+              : _selectedLocation!.latitude,
+          _currentLocation!.longitude > _selectedLocation!.longitude
               ? _currentLocation!.longitude
-              : _endLocation!.longitude,
+              : _selectedLocation!.longitude,
         ),
       );
 
