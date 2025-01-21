@@ -209,37 +209,6 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  Future<int> _getAQI(double lat, double lng) async {
-    final url = Uri.https('api.waqi.info',
-      '/feed/geo:$lat;$lng/',
-      {'token': _waqiApiKey},
-    );
-    print("LAT: $lat, LNG: $lng");
-
-    try {
-      final response = await http.get(url);
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-
-        // Accessing 'data' and then the 'aqi' value
-        if (data['status'] == 'ok' && data['data'] != null) {
-          final aqi = data['data']['aqi']; //
-          return aqi;
-        } else {
-          throw Exception('Failed to retrieve AQI data or invalid data format');
-        }
-      } else {
-        throw Exception("Failed to load AQI data: ${response.statusCode}");
-      }
-    } catch (e) {
-      print('Error: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error loading AQI data.")));
-      }
-    }
-    return -1; // Return -1 on error
-  }
-
 
   void _populateMarkers(List<dynamic> stations) async {
     Set<Marker> markers = {};
@@ -349,16 +318,6 @@ class _MapPageState extends State<MapPage> {
     return BitmapDescriptor.fromBytes(data!.buffer.asUint8List());
   }
 
-  Color _getAQIColor(int aqi) {
-    if (aqi == 0) return Colors.grey;
-    if (aqi <= 50) return Colors.green;
-    if (aqi <= 100) return Colors.yellow;
-    if (aqi <= 150) return Colors.orange;
-    if (aqi <= 200) return Colors.red;
-    if (aqi <= 300) return Colors.purple;
-    return Colors.brown;
-  }
-
   Future<void> _updateEndLocation(String query) async {
     try {
       final List<Location> locations = await locationFromAddress(query);
@@ -412,32 +371,131 @@ class _MapPageState extends State<MapPage> {
     return points;
   }
 
+  Future<List> _getBatchAQI(List<LatLng> points) async {
+    final url = Uri.parse('https://4ca1-2001-fb1-17a-be89-982d-481d-6754-f2c6.ngrok-free.app/api/nearest-stations-aqi');
 
-// Function to add polyline to the map
-  Future<void> _addPolyline(List<LatLng> points) async {
-    final tenPercentofRoute = getTenPercent(points.length);
-    for (int i = tenPercentofRoute;i<points.length;i = i + tenPercentofRoute){
-      PolylineId id = PolylineId("polyline_${DateTime.now().millisecondsSinceEpoch}");
-      Color aqiColor = _getAQIColor(await _getAQI(points[i].latitude,points[i].longitude));
-      // print("Point lenght: ${points.length}");
-      Polyline polyline = Polyline(
-        polylineId: id,
-        width: 5,
-        color: aqiColor,
-        points: [points[i-tenPercentofRoute], points[i]],
+    try {
+      // Prepare the JSON payload
+      final coordinates = points.map((point) {
+        return {"latitude": point.latitude, "longitude": point.longitude};
+      }).toList();
+
+      final response = await http.post(
+        url,
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({"coordinates": coordinates}),
       );
 
-      setState(() {
-        polylines[id] = polyline;
-      });
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
 
+        if (data['success'] == true) {
+          // Create a list of Futures for each AQI request
+          final futureList = data['results'].map<Future<int>>((result) async {
+            final station = result['nearest_station'];
+            // If AQI is available, return it, else return 0
+            if (station != null && station['aqi'] != null) {
+              return station['aqi'] as int;
+            } else {
+              return 0;
+            }
+          }).toList();
+
+          // Wait for all the AQI values asynchronously
+          final aqiList = await Future.wait(futureList);
+
+          // Return the list of AQI values
+          return aqiList;
+        } else {
+          throw Exception('Failed to get AQI: ${data['error']}');
+        }
+      } else {
+        throw Exception("Failed to fetch data: ${response.statusCode}");
+      }
+    } catch (e) {
+      print("Error fetching AQI batch data: $e");
+      return List.filled(points.length, 0); // Default to 0 for all points on error
     }
   }
 
-  int getTenPercent(int number) {
-    return (number * 10) ~/ 100;
+
+
+  Future<int> _getAQI(double lat, double lng) async {
+    final url = Uri.https('api.waqi.info',
+      '/feed/geo:$lat;$lng/',
+      {'token': _waqiApiKey},
+    );
+    print("LAT: $lat, LNG: $lng");
+
+    try {
+      final response = await http.get(url);
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+
+        // Accessing 'data' and then the 'aqi' value
+        if (data['status'] == 'ok' && data['data'] != null) {
+          final aqi = data['data']['aqi']; //
+          return aqi;
+        } else {
+          throw Exception('Failed to retrieve AQI data or invalid data format');
+        }
+      } else {
+        throw Exception("Failed to load AQI data: ${response.statusCode}");
+      }
+    } catch (e) {
+      print('Error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error loading AQI data.")));
+      }
+    }
+    return -1; // Return -1 on error
   }
 
+  Future<void> _addPolyline(List<LatLng> points) async {
+    try {
+      // Get AQI data for all points
+      final aqiValues = await _getBatchAQI(points);
+      print("AQI result: $aqiValues");
+
+      for (int i = 1; i < points.length; i++) {
+        PolylineId id = PolylineId("polyline_${DateTime.now().millisecondsSinceEpoch}_$i");
+        int aqi = aqiValues[i];
+
+        // Get AQI color
+        Color aqiColor = _getAQIColor(aqi);
+
+        // Create polyline segment
+        Polyline polyline = Polyline(
+          polylineId: id,
+          width: 5,
+          color: aqiColor,
+          points: [points[i - 1], points[i]],
+        );
+
+        // Add polyline to map
+        setState(() {
+          polylines[id] = polyline;
+        });
+      }
+    } catch (e) {
+      print("Error adding polylines: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text("Error adding polylines.")));
+      }
+    }
+  }
+
+
+  Color _getAQIColor(int aqi) {
+    if (aqi <= 0) return Colors.grey;
+    if (aqi <= 50) return Colors.green;
+    if (aqi <= 100) return Colors.yellow;
+    if (aqi <= 150) return Colors.orange;
+    if (aqi <= 200) return Colors.red;
+    if (aqi <= 300) return Colors.purple;
+    return Colors.brown;
+  }
 
   _getPolyline() async {
     final String apiKey = dotenv.env['GOOGLE_API'] ?? 'API key not found';
