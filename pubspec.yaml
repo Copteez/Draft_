@@ -1,4 +1,4 @@
-name: api_test
+name: MySecureMap
 description: "A new Flutter project."
 publish_to: 'none'
 version: 1.0.0+1
@@ -12,14 +12,15 @@ dependencies:
   cupertino_icons: ^1.0.6
   flutter_dotenv: ^5.0.2
   http: ^0.13.6
-  fl_chart: 0.45.1
+  fl_chart: ^0.45.1
   google_maps_flutter: ^2.9.0
-  intl: ^0.18.0
-  geocoding: ^2.0.0
+  intl: ^0.20.2
+  geocoding: ^3.0.0
   geolocator: ^13.0.1
-  location: ^6.0.2
+  location: ^8.0.0
   google_maps_routes: ^1.1.2
   google_maps_webservice: ^0.0.19  # Example for Google Maps Web Service API
+  flutter_animate: ^4.1.1 
 
 
   # The "flutter_lints" package below contains a set of recommended lints to
@@ -27,7 +28,7 @@ dependencies:
   # activated in the `analysis_options.yaml` file located at the root of your
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
-  flutter_lints: ^3.0.0
+  flutter_lints: ^5.0.0
   flutter_polyline_points: ^1.0.0
 
 # For information on the generic Dart part of this file, see the
@@ -44,6 +45,7 @@ flutter:
   # To add assets to your application, add an assets section, like this:
   assets:
     - .env
+    - assets/loading.gif
   #   - images/a_dot_burr.jpeg
   #   - images/a_dot_ham.jpeg
 
