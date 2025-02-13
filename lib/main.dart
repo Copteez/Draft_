@@ -1,41 +1,48 @@
+// this is the main file of the project
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'login.dart';     
+import 'login.dart';
 import 'register.dart';
 import 'home_page.dart';
+import 'config.dart';
+import 'map.dart';
 
-void main() async {
-  // Ensure Flutter bindings are initialized
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // Load the .env file
   await dotenv.load(fileName: '.env');
 
-  runApp(const MyApp());
+  // สร้าง instance ของ AppConfig
+  final config = AppConfig.fromDotEnv();
+
+  runApp(MyApp(config: config));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final AppConfig config;
+  const MyApp({super.key, required this.config});
 
   @override
   Widget build(BuildContext context) {
+    // ตอนนี้ทุกหน้าสามารถรับค่า config นี้ไปใช้งานได้
     return MaterialApp(
       title: 'Flutter Demo',
       theme: ThemeData(useMaterial3: true),
       initialRoute: '/',
       routes: {
-        '/': (context) => const SplashScreen(),
-        '/login': (context) => LoginScreen(),      
-        '/register': (context) => RegisterScreen(),
-        '/home': (context) => HomePage(),
+        '/': (context) => SplashScreen(config: config),
+        '/login': (context) => LoginScreen(config: config),
+        '/register': (context) => RegisterScreen(config: config),
+        '/home': (context) => HomePage(config: config),
+        '/map': (context) => MapPage(config: config),
       },
     );
   }
 }
 
 class SplashScreen extends StatefulWidget {
-  const SplashScreen({super.key});
+  final AppConfig config;
+  const SplashScreen({super.key, required this.config});
 
   @override
   _SplashScreenState createState() => _SplashScreenState();
@@ -45,7 +52,6 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-
     Timer(const Duration(seconds: 2), () {
       Navigator.of(context).pushReplacementNamed('/login');
     });

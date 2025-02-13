@@ -1,21 +1,23 @@
 import 'dart:convert';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
+import 'config.dart';
 
 class MapPage extends StatefulWidget {
+  final AppConfig config;
+  const MapPage({Key? key, required this.config}) : super(key: key);
+
   @override
   _MapPageState createState() => _MapPageState();
 }
 
 class _MapPageState extends State<MapPage> {
-
   late GoogleMapController mapController;
   Set<Marker> _markers = {};
   Map<PolylineId, Polyline> polylines = {};
@@ -28,7 +30,7 @@ class _MapPageState extends State<MapPage> {
   LatLng? _selectedLocation;
   LatLng? _currentLocation;
 
-  final String _waqiApiKey = dotenv.env['WAQIAPIKEY'] ?? 'default_value';
+  late final String _waqiApiKey;
   Map<String, dynamic>? _selectedStation;
 
   final TextEditingController _searchController = TextEditingController();
@@ -36,15 +38,16 @@ class _MapPageState extends State<MapPage> {
 
   // Initial position (default location until we get the user's location)
   static const CameraPosition _defaultPosition = CameraPosition(
-    target: LatLng(15.41340027175844, 100.58989014756472),  // ThaiLand
-    zoom: 2, // Low zoom until the user's location is fetched
+    target: LatLng(15.41340027175844, 100.58989014756472), // Thailand
+    zoom: 2,
   );
 
   @override
   void initState() {
     super.initState();
+    // รับค่า API key จาก config
+    _waqiApiKey = widget.config.waqiApiKey;
     _getCurrentLocation();
-
   }
 
   @override
@@ -87,13 +90,12 @@ class _MapPageState extends State<MapPage> {
                       await _selectLocation(result['place_id']);
                       _updateEndLocation(_searchController.text);
                       _updateCameraPosition();
-                      _markers.add(
-                          Marker(
-                            markerId: MarkerId('Destination_Location'),
-                            position: _selectedLocation!,
-                            infoWindow: InfoWindow(title: 'END_Location'),
-                            icon: BitmapDescriptor.defaultMarker,
-                          ));
+                      _markers.add(Marker(
+                        markerId: MarkerId('Destination_Location'),
+                        position: _selectedLocation!,
+                        infoWindow: InfoWindow(title: 'END_Location'),
+                        icon: BitmapDescriptor.defaultMarker,
+                      ));
                       _getPolyline();
                     },
                   );
@@ -108,7 +110,6 @@ class _MapPageState extends State<MapPage> {
                 if (newValue != null) {
                   setState(() {
                     _selectedMode = newValue;
-                    // _getRoute(); // Fetch the route again when the mode changes
                   });
                 }
               },
@@ -138,20 +139,20 @@ class _MapPageState extends State<MapPage> {
 
   void _setMyLocation(LatLng newLocation) {
     setState(() {
-      // Update the current location and add a marker
       _currentLocation = newLocation;
 
-      _markers.removeWhere((marker) => marker.markerId.value == 'currentLocation');
+      _markers
+          .removeWhere((marker) => marker.markerId.value == 'currentLocation');
       _markers.add(
         Marker(
           markerId: MarkerId('currentLocation'),
           position: newLocation,
           infoWindow: InfoWindow(title: 'Your Selected Location'),
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+          icon:
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
         ),
       );
 
-      // Update the camera position to focus on the new location
       mapController.animateCamera(
         CameraUpdate.newLatLngZoom(newLocation, 14),
       );
@@ -161,7 +162,6 @@ class _MapPageState extends State<MapPage> {
     });
   }
 
-  // Function to get current location of the user
   Future<void> _getCurrentLocation() async {
     Position position = await Geolocator.getCurrentPosition(
       desiredAccuracy: LocationAccuracy.high,
@@ -176,10 +176,8 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
-  // Map creation callback
   void _onMapCreated(GoogleMapController controller) {
     mapController = controller;
-    // Optional: You can move the camera to the user's location once the map is created, in case the location is already available.
     if (_currentLocation != null) {
       mapController.animateCamera(
         CameraUpdate.newLatLngZoom(_currentLocation!, 14),
@@ -204,11 +202,12 @@ class _MapPageState extends State<MapPage> {
     } catch (e) {
       print(e);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error loading AQI data.")));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error loading AQI data.")),
+        );
       }
     }
   }
-
 
   void _populateMarkers(List<dynamic> stations) async {
     Set<Marker> markers = {};
@@ -246,7 +245,8 @@ class _MapPageState extends State<MapPage> {
           markerId: MarkerId('currentLocation'),
           position: _currentLocation!,
           infoWindow: InfoWindow(title: 'Your Location'),
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+          icon:
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
         ),
       );
     });
@@ -304,15 +304,21 @@ class _MapPageState extends State<MapPage> {
     final textPainter = TextPainter(
       text: TextSpan(
         text: aqiText,
-        style: TextStyle(fontSize: 40, color: Colors.white, fontWeight: FontWeight.bold),
+        style: TextStyle(
+            fontSize: 40, color: Colors.white, fontWeight: FontWeight.bold),
       ),
       textAlign: TextAlign.center,
       textDirection: TextDirection.ltr,
     );
     textPainter.layout();
-    textPainter.paint(canvas, Offset(radius - textPainter.width / 2, radius - textPainter.height / 2));
+    textPainter.paint(
+        canvas,
+        Offset(
+            radius - textPainter.width / 2, radius - textPainter.height / 2));
 
-    final image = await pictureRecorder.endRecording().toImage((radius * 2).toInt(), (radius * 2).toInt());
+    final image = await pictureRecorder
+        .endRecording()
+        .toImage((radius * 2).toInt(), (radius * 2).toInt());
     final data = await image.toByteData(format: ui.ImageByteFormat.png);
 
     return BitmapDescriptor.fromBytes(data!.buffer.asUint8List());
@@ -323,16 +329,15 @@ class _MapPageState extends State<MapPage> {
       final List<Location> locations = await locationFromAddress(query);
       if (locations.isNotEmpty) {
         setState(() {
-          _selectedLocation = LatLng(locations[0].latitude, locations[0].longitude);
+          _selectedLocation =
+              LatLng(locations[0].latitude, locations[0].longitude);
         });
-        // _getRoute();
       }
     } catch (e) {
       print('Error fetching location: $e');
     }
   }
 
-  // Decode polyline points from the API response
   List<LatLng> _decodePoly(String poly) {
     var list = poly.codeUnits;
     List<LatLng> points = [];
@@ -372,10 +377,10 @@ class _MapPageState extends State<MapPage> {
   }
 
   Future<List> _getBatchAQI(List<LatLng> points) async {
-    final url = Uri.parse('https://4ca1-2001-fb1-17a-be89-982d-481d-6754-f2c6.ngrok-free.app/api/nearest-stations-aqi');
+    final url = Uri.parse(
+        'https://4ca1-2001-fb1-17a-be89-982d-481d-6754-f2c6.ngrok-free.app/api/nearest-stations-aqi');
 
     try {
-      // Prepare the JSON payload
       final coordinates = points.map((point) {
         return {"latitude": point.latitude, "longitude": point.longitude};
       }).toList();
@@ -390,10 +395,8 @@ class _MapPageState extends State<MapPage> {
         final data = jsonDecode(response.body);
 
         if (data['success'] == true) {
-          // Create a list of Futures for each AQI request
           final futureList = data['results'].map<Future<int>>((result) async {
             final station = result['nearest_station'];
-            // If AQI is available, return it, else return 0
             if (station != null && station['aqi'] != null) {
               return station['aqi'] as int;
             } else {
@@ -401,10 +404,7 @@ class _MapPageState extends State<MapPage> {
             }
           }).toList();
 
-          // Wait for all the AQI values asynchronously
           final aqiList = await Future.wait(futureList);
-
-          // Return the list of AQI values
           return aqiList;
         } else {
           throw Exception('Failed to get AQI: ${data['error']}');
@@ -414,14 +414,13 @@ class _MapPageState extends State<MapPage> {
       }
     } catch (e) {
       print("Error fetching AQI batch data: $e");
-      return List.filled(points.length, 0); // Default to 0 for all points on error
+      return List.filled(points.length, 0);
     }
   }
 
-
-
   Future<int> _getAQI(double lat, double lng) async {
-    final url = Uri.https('api.waqi.info',
+    final url = Uri.https(
+      'api.waqi.info',
       '/feed/geo:$lat;$lng/',
       {'token': _waqiApiKey},
     );
@@ -431,10 +430,8 @@ class _MapPageState extends State<MapPage> {
       final response = await http.get(url);
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-
-        // Accessing 'data' and then the 'aqi' value
         if (data['status'] == 'ok' && data['data'] != null) {
-          final aqi = data['data']['aqi']; //
+          final aqi = data['data']['aqi'];
           return aqi;
         } else {
           throw Exception('Failed to retrieve AQI data or invalid data format');
@@ -445,26 +442,25 @@ class _MapPageState extends State<MapPage> {
     } catch (e) {
       print('Error: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error loading AQI data.")));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text("Error loading AQI data.")));
       }
     }
-    return -1; // Return -1 on error
+    return -1;
   }
 
   Future<void> _addPolyline(List<LatLng> points) async {
     try {
-      // Get AQI data for all points
       final aqiValues = await _getBatchAQI(points);
       print("AQI result: $aqiValues");
 
       for (int i = 1; i < points.length; i++) {
-        PolylineId id = PolylineId("polyline_${DateTime.now().millisecondsSinceEpoch}_$i");
+        PolylineId id =
+            PolylineId("polyline_${DateTime.now().millisecondsSinceEpoch}_$i");
         int aqi = aqiValues[i];
 
-        // Get AQI color
         Color aqiColor = _getAQIColor(aqi);
 
-        // Create polyline segment
         Polyline polyline = Polyline(
           polylineId: id,
           width: 5,
@@ -472,7 +468,6 @@ class _MapPageState extends State<MapPage> {
           points: [points[i - 1], points[i]],
         );
 
-        // Add polyline to map
         setState(() {
           polylines[id] = polyline;
         });
@@ -486,7 +481,6 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-
   Color _getAQIColor(int aqi) {
     if (aqi <= 0) return Colors.grey;
     if (aqi <= 50) return Colors.green;
@@ -498,16 +492,15 @@ class _MapPageState extends State<MapPage> {
   }
 
   _getPolyline() async {
-    final String apiKey = dotenv.env['GOOGLE_API'] ?? 'API key not found';
+    final String apiKey = widget.config.googleApiKey;
     final origin = _currentLocation!;
     final destination = _selectedLocation!;
 
-    // Prepare the URL to fetch the directions from Google Maps API with multiple alternatives
     final url = Uri.https('maps.googleapis.com', '/maps/api/directions/json', {
       'origin': '${origin.latitude},${origin.longitude}',
       'destination': '${destination.latitude},${destination.longitude}',
-      'mode': _selectedMode,  // Driving, walking, or bicycling
-      'alternatives': 'true',  // Request multiple routes
+      'mode': _selectedMode,
+      'alternatives': 'true',
       'key': apiKey,
     });
 
@@ -517,13 +510,11 @@ class _MapPageState extends State<MapPage> {
         final data = jsonDecode(response.body);
         final routes = data['routes'];
 
-        // Clear any existing polylines before adding new ones
         setState(() {
           polylines.clear();
           polylineCoordinates.clear();
         });
 
-        // Add each alternative route as a polyline
         for (var route in routes) {
           List<LatLng> points = [];
           for (var leg in route['legs']) {
@@ -532,8 +523,6 @@ class _MapPageState extends State<MapPage> {
               points.addAll(_decodePoly(polyline));
             }
           }
-
-          // Create a new polyline for this route
           await _addPolyline(points);
         }
       } else {
@@ -541,7 +530,8 @@ class _MapPageState extends State<MapPage> {
       }
     } catch (e) {
       print(e);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error loading routes.")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Error loading routes.")));
     }
   }
 
@@ -554,12 +544,14 @@ class _MapPageState extends State<MapPage> {
       return;
     }
 
-    final String apiKey = dotenv.env['GOOGLE_API'] ?? 'API_KEY_NOT_SET';
-    final url = Uri.https('maps.googleapis.com', '/maps/api/place/autocomplete/json', {
+    final String apiKey = widget.config.googleApiKey;
+    final url =
+        Uri.https('maps.googleapis.com', '/maps/api/place/autocomplete/json', {
       'input': query,
       'key': apiKey,
-      'location': '${_currentLocation?.latitude},${_currentLocation?.longitude}',
-      'radius': '50000', // 50 km search radius
+      'location':
+          '${_currentLocation?.latitude},${_currentLocation?.longitude}',
+      'radius': '50000',
     });
 
     try {
@@ -567,7 +559,8 @@ class _MapPageState extends State<MapPage> {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         setState(() {
-          _autocompleteResults = List<Map<String, dynamic>>.from(data['predictions']);
+          _autocompleteResults =
+              List<Map<String, dynamic>>.from(data['predictions']);
           _isSearching = true;
         });
       }
@@ -577,12 +570,12 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  // Select location and show a marker
   Future<void> _selectLocation(String placeId) async {
     setState(() => _isSearching = false);
 
-    final String apiKey = dotenv.env['GOOGLE_API'] ?? 'API_KEY_NOT_SET';
-    final url = Uri.https('maps.googleapis.com', '/maps/api/place/details/json', {
+    final String apiKey = widget.config.googleApiKey;
+    final url =
+        Uri.https('maps.googleapis.com', '/maps/api/place/details/json', {
       'place_id': placeId,
       'key': apiKey,
     });
@@ -632,8 +625,7 @@ class _MapPageState extends State<MapPage> {
         ),
       );
 
-      // Set the camera to fit the bounds with some padding
-      mapController.animateCamera(CameraUpdate.newLatLngBounds(bounds, 50)); // Adjust padding as needed
+      mapController.animateCamera(CameraUpdate.newLatLngBounds(bounds, 50));
     }
   }
 }

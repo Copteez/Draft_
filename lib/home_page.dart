@@ -1,907 +1,1050 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:http/http.dart' as http;
-import 'package:fl_chart/fl_chart.dart';
 import 'package:geolocator/geolocator.dart';
-import 'map.dart';
-import 'details_page.dart';
-import 'package:intl/intl.dart';
+import 'package:fl_chart/fl_chart.dart';
+import 'config.dart';
+import 'network_service.dart';
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+  final AppConfig config;
+  const HomePage({Key? key, required this.config}) : super(key: key);
 
   @override
   _HomePageState createState() => _HomePageState();
 }
 
 class _HomePageState extends State<HomePage> {
-  late Future<Forecast> forecastData;
-  Timer? _timer;
-  DateTime lastUpdated = DateTime.now();
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey =
+      GlobalKey<ScaffoldMessengerState>();
+
+  // Theme Mode
+  bool _isDarkMode = true;
+  bool _isHistoryMode = false; // โหมด History
+  String _selectedHistoryView = "day"; // ค่าเริ่มต้นเลือกดูเป็น day
+
+  // User Location & AQI Data
+  Position? _currentPosition;
+  Map<String, dynamic>? _nearestStation;
+  String _lastUpdated = "Loading...";
+
+  // Colors
+  final Color darkBackground = Color(0xFF2C2C47);
+  final Color lightBackground = Colors.white;
+
+  // Random AQI Data & Forecast
+  List<FlSpot> _aqiData = [];
+  String _forecastText = "Loading...";
+  double _highestAQI = 0.0; // ใช้สำหรับระบุค่า AQI สูงสุด
+
+  // History Graph Data
+  List<FlSpot> _historyData = [];
+  List<String> _historyLabels = [];
+
+  // Instance ของ NetworkService
+  late final NetworkService networkService;
 
   @override
   void initState() {
     super.initState();
-    fetchForecast();
-    _timer = Timer.periodic(Duration(minutes: 30), (timer) {
-      fetchForecast();
-    });
+    networkService = NetworkService(config: widget.config);
+    _getLocationAndFetchData();
+    _generateRandomAQIData();
   }
 
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
+  /// ==========================
+  /// GENERATE RANDOM AQI DATA (สำหรับ 24 ชั่วโมง Forecast)
+  /// ==========================
+  void _generateRandomAQIData() {
+    _aqiData.clear();
+    Random random = Random();
+    int maxAQI = 0;
+    int maxHour = 0;
 
-  void fetchForecast() {
+    for (int i = 0; i < 24; i++) {
+      int aqi = random.nextInt(300) + 1;
+      _aqiData.add(FlSpot(i.toDouble(), aqi.toDouble()));
+      if (aqi > maxAQI) {
+        maxAQI = aqi;
+        maxHour = i;
+      }
+    }
+
     setState(() {
-      forecastData = getForecast();
+      _forecastText = "The AQI is expected to reach $maxAQI at ${maxHour}:00";
+      _highestAQI = maxAQI.toDouble();
     });
   }
 
-  Future<Forecast> getForecast() async {
+  /// ==========================
+  /// FETCH DATA & LOCATION
+  /// ==========================
+  Future<void> _getLocationAndFetchData() async {
+    await _determinePosition();
+    await _fetchNearestStation();
+  }
+
+  Future<void> _fetchNearestStation() async {
+    if (_currentPosition == null) return;
+
+    // ใช้ NetworkService เพื่อเลือก base URL ที่เหมาะสม
+    final effectiveBaseUrl = await networkService.getEffectiveBaseUrl();
+    final url = "$effectiveBaseUrl/api/nearest-station-aqi";
+    final body = jsonEncode({
+      "latitude": _currentPosition!.latitude,
+      "longitude": _currentPosition!.longitude
+    });
+
     try {
-      Position userLocation = await _determinePosition();
-      double latitude = userLocation.latitude;
-      double longitude = userLocation.longitude;
-
-      var apiKey = "58619aef51181265b04347c2df10bd62a56995ef";
-      var url = "api.waqi.info";
-      var path = "/feed/geo:$latitude;$longitude/";
-      var params = {"token": apiKey};
-      var uri = Uri.https(url, path, params);
-
-      var response = await http.get(uri);
+      final response = await http.post(
+        Uri.parse(url),
+        headers: {"Content-Type": "application/json"},
+        body: body,
+      );
 
       if (response.statusCode == 200) {
-        var jsonData = jsonDecode(response.body);
-        return Forecast.fromJson(jsonData);
-      } else {
-        throw Exception("Failed to load forecast data");
+        final data = jsonDecode(response.body);
+        if (data["success"] == true) {
+          setState(() {
+            _nearestStation = data["nearest_station"];
+            _lastUpdated = _nearestStation?["timestamp"] ?? "Unknown Time";
+          });
+        }
       }
     } catch (e) {
-      throw Exception("Error fetching data: $e");
+      _showError("Error fetching nearest station: $e");
     }
   }
 
+  /// ==========================
+  /// FETCH HISTORY DATA (hour/day/month)
+  /// ==========================
+  Future<void> _fetchHistoryData() async {
+    if (_currentPosition == null) return;
+    final effectiveBaseUrl = await networkService.getEffectiveBaseUrl();
+    final url = "$effectiveBaseUrl/api/aqi-history";
+    final body = jsonEncode({
+      "latitude": _currentPosition!.latitude,
+      "longitude": _currentPosition!.longitude,
+      "view_by": _selectedHistoryView, // "hour", "day", "month"
+    });
 
-  Future<Position> _determinePosition() async {
-    bool serviceEnabled;
-    LocationPermission permission;
+    try {
+      final response = await http.post(
+        Uri.parse(url),
+        headers: {"Content-Type": "application/json"},
+        body: body,
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        print("History data received: $data");
 
-    serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      return Future.error('Location services are disabled.');
+        if (data["success"] == true) {
+          List history = data["history"];
+          List<FlSpot> filledData = [];
+          List<String> filledLabels = [];
+          DateTime now = DateTime.now();
+
+          // กำหนด multiplier สำหรับแกน X (month ใช้ระยะห่างมากขึ้น)
+          double xMultiplier = (_selectedHistoryView == "month") ? 2.0 : 1.0;
+          if (_selectedHistoryView == "hour") {
+            // สร้าง Map สำหรับข้อมูล API โดย key "YYYY-MM-DD HH"
+            Map<String, double> hourData = {};
+            for (var item in history) {
+              String tsStr = item["timestamps"]?.toString() ?? "";
+              try {
+                var parts = tsStr.split(' ');
+                Map<String, String> monthMap = {
+                  "Jan": "01",
+                  "Feb": "02",
+                  "Mar": "03",
+                  "Apr": "04",
+                  "May": "05",
+                  "Jun": "06",
+                  "Jul": "07",
+                  "Aug": "08",
+                  "Sep": "09",
+                  "Oct": "10",
+                  "Nov": "11",
+                  "Dec": "12"
+                };
+                String day = parts[1];
+                String month = monthMap[parts[2]] ?? "01";
+                String year = parts[3];
+                String hour = parts[4].substring(0, 2);
+                String key = "$year-$month-$day $hour";
+                double aqi;
+                if (item["aqi"] is int) {
+                  aqi = (item["aqi"] as int).toDouble();
+                } else if (item["aqi"] is double) {
+                  aqi = item["aqi"];
+                } else if (item["aqi"] is String) {
+                  aqi = double.tryParse(item["aqi"]) ?? 0;
+                } else {
+                  aqi = 0;
+                }
+                hourData[key] = aqi;
+              } catch (e) {
+                // ข้ามรายการที่มีปัญหาในการแยกข้อมูล
+              }
+            }
+            // วนลูป 24 ชั่วโมงล่าสุด
+            for (int i = 0; i < 24; i++) {
+              DateTime hourTime = now.subtract(Duration(hours: 23 - i));
+              String day = hourTime.day.toString().padLeft(2, '0');
+              String month = hourTime.month.toString().padLeft(2, '0');
+              String year = hourTime.year.toString();
+              String hour = hourTime.hour.toString().padLeft(2, '0');
+              String key = "$year-$month-$day $hour";
+              double value = hourData.containsKey(key) ? hourData[key]! : 0;
+              String label = "$hour:00";
+              double xValue = i * xMultiplier;
+              filledData.add(FlSpot(xValue, value));
+              filledLabels.add(label);
+            }
+          } else if (_selectedHistoryView == "day") {
+            // สร้าง Map สำหรับข้อมูล API โดย key "YYYY-MM-DD"
+            Map<String, double> dayData = {};
+            for (var item in history) {
+              String dateStr = item["date"]?.toString() ?? "";
+              try {
+                var parts = dateStr.split(' ');
+                Map<String, String> monthMap = {
+                  "Jan": "01",
+                  "Feb": "02",
+                  "Mar": "03",
+                  "Apr": "04",
+                  "May": "05",
+                  "Jun": "06",
+                  "Jul": "07",
+                  "Aug": "08",
+                  "Sep": "09",
+                  "Oct": "10",
+                  "Nov": "11",
+                  "Dec": "12"
+                };
+                String day = parts[1];
+                String month = monthMap[parts[2]] ?? "01";
+                String year = parts[3];
+                String key = "$year-$month-$day";
+                double aqi;
+                if (item["aqi"] is int) {
+                  aqi = (item["aqi"] as int).toDouble();
+                } else if (item["aqi"] is double) {
+                  aqi = item["aqi"];
+                } else if (item["aqi"] is String) {
+                  aqi = double.tryParse(item["aqi"]) ?? 0;
+                } else {
+                  aqi = 0;
+                }
+                dayData[key] = aqi;
+              } catch (e) {
+                // ข้ามรายการที่มีปัญหาในการแยกข้อมูล
+              }
+            }
+            // วนลูป 30 วันล่าสุด
+            for (int i = 0; i < 30; i++) {
+              DateTime dayTime = now.subtract(Duration(days: 29 - i));
+              String day = dayTime.day.toString().padLeft(2, '0');
+              String month = dayTime.month.toString().padLeft(2, '0');
+              String year = dayTime.year.toString();
+              String key = "$year-$month-$day";
+              double value = dayData.containsKey(key) ? dayData[key]! : 0;
+              String label = "$day-$month";
+              double xValue = i * xMultiplier;
+              filledData.add(FlSpot(xValue, value));
+              filledLabels.add(label);
+            }
+          } else if (_selectedHistoryView == "month") {
+            // สร้าง Map สำหรับข้อมูล API โดย key "YYYY-MM"
+            Map<String, double> monthData = {};
+            for (var item in history) {
+              String monthStr = item["month"]?.toString() ?? "";
+              if (monthStr.isNotEmpty) {
+                double aqi;
+                if (item["aqi"] is int) {
+                  aqi = item["aqi"].toDouble();
+                } else if (item["aqi"] is double) {
+                  aqi = item["aqi"];
+                } else if (item["aqi"] is String) {
+                  aqi = double.tryParse(item["aqi"]) ?? 0;
+                } else {
+                  aqi = 0;
+                }
+                monthData[monthStr] = aqi;
+              }
+            }
+            // วนลูป 12 เดือนล่าสุด
+            for (int i = 0; i < 12; i++) {
+              DateTime dt = DateTime(now.year, now.month)
+                  .subtract(Duration(days: 30 * (11 - i)));
+              String key = "${dt.year}-${dt.month.toString().padLeft(2, '0')}";
+              double value = monthData.containsKey(key) ? monthData[key]! : 0;
+              Map<int, String> monthMap = {
+                1: "Jan",
+                2: "Feb",
+                3: "Mar",
+                4: "Apr",
+                5: "May",
+                6: "Jun",
+                7: "Jul",
+                8: "Aug",
+                9: "Sep",
+                10: "Oct",
+                11: "Nov",
+                12: "Dec"
+              };
+              String label = "${monthMap[dt.month]} ${dt.year}";
+              double xValue = i * xMultiplier;
+              filledData.add(FlSpot(xValue, value));
+              filledLabels.add(label);
+            }
+          }
+
+          _historyData = filledData;
+          _historyLabels = filledLabels;
+          setState(() {});
+        } else {
+          _showError("Error fetching history: ${data["error"]}");
+        }
+      } else {
+        _showError("Error fetching history: ${response.statusCode}");
+      }
+    } catch (e) {
+      _showError("Error fetching history: $e");
     }
+  }
 
-    permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
+  /// ==========================
+  /// LOCATION HANDLING
+  /// ==========================
+  Future<void> _determinePosition() async {
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
       permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        return Future.error('Permissions denied');
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        _showError("Location permissions are denied");
+        return;
       }
     }
 
-    if (permission == LocationPermission.deniedForever) {
-      return Future.error('Permissions denied, cannot request permissions');
+    try {
+      Position position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high);
+      setState(() {
+        _currentPosition = position;
+      });
+    } catch (e) {
+      _showError("Error getting location: $e");
     }
-
-    return await Geolocator.getCurrentPosition();
   }
 
+  /// ==========================
+  /// UI & THEMING
+  /// ==========================
+  void _toggleTheme(bool value) {
+    setState(() {
+      _isDarkMode = value;
+    });
+  }
+
+  void _showError(String message) {
+    _scaffoldMessengerKey.currentState?.showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  /// ==========================
+  /// BUILD UI
+  /// ==========================
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          icon: Icon(Icons.search),
-          onPressed: () {},
-        ),
-        centerTitle: true,
-        title: Container(
-          width: 50,
-          height: 50,
-          decoration: BoxDecoration(
-            color: Color(0xFF18966C),
-            shape: BoxShape.circle,
-          ),
-          child: Center(
-            child: Icon(Icons.air, size: 30, color: Colors.white),
-          ),
-        ),
-        actions: [
-          IconButton(
-            icon: Icon(Icons.notifications),
-            onPressed: () {},
-          ),
-        ],
+    return MaterialApp(
+      scaffoldMessengerKey: _scaffoldMessengerKey,
+      theme: ThemeData(
+        scaffoldBackgroundColor: _isDarkMode ? darkBackground : lightBackground,
       ),
-      body: FutureBuilder<Forecast>(
-        future: forecastData,
-        builder: buildForecast,
-      ),
-      bottomNavigationBar: BottomNavigationBar(
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.home),
-            label: 'Home',
+      home: Scaffold(
+        key: _scaffoldKey,
+        backgroundColor: _isDarkMode ? darkBackground : lightBackground,
+        appBar: _buildAppBar(),
+        drawer: _buildDrawer(),
+        body: RefreshIndicator(
+          onRefresh: () async {
+            _generateRandomAQIData();
+          },
+          child: ListView(
+            padding: EdgeInsets.all(16.0),
+            children: [
+              _buildNearestStationCard(),
+              SizedBox(height: 32),
+              _buildAQIPredictionGraph(),
+            ],
           ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.map),
-            label: 'Map & Path Finder',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.settings),
-            label: 'Settings',
-          ),
-        ],
-        currentIndex: 0,
-        selectedItemColor: Color(0xFF77A1C9),
-        unselectedItemColor: Colors.grey,
-        onTap: (index) {
-          if (index == 1) {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => MapPage()),
-            );
-          }
-        },
+        ),
       ),
     );
   }
 
-  Widget buildForecast(BuildContext context, AsyncSnapshot<Forecast> snapshot) {
-    if (snapshot.connectionState == ConnectionState.waiting) {
-      return const Center(child: CircularProgressIndicator());
-    } else if (snapshot.hasError) {
-      return Center(child: Text("Error: \${snapshot.error}"));
-    } else if (snapshot.hasData) {
-      Forecast forecast = snapshot.data!;
-      var date = DateTime.now();
-      var formattedDate = DateFormat('EEEE, d MMMM y').format(date);
-      var formattedTime = DateFormat('h:mm a').format(date);
-      var minutesAgo = DateTime.now().difference(forecast.time).inMinutes;
-
-      return ListView(
-        padding: const EdgeInsets.all(16.0),
-        children: [
-          _buildAQIBox(forecast.city, formattedDate, formattedTime, forecast.aqi.toDouble(), forecast.stationId),
-          const SizedBox(height: 20),
-          _buildLastUpdated(minutesAgo),
-          const SizedBox(height: 20),
-          _buildMinimal24HourPrediction(),
-          const SizedBox(height: 20),
-          _buildCurrentStatBox(forecast.iaqi),
-        ],
-      );
-    } else {
-      return Center(child: Text("No data available."));
-    }
-  }
-
-  Widget _buildMinimal24HourPrediction() {
-    List<String> labels = [
-      "8 AM", "9 AM", "10 AM", "11 AM", "12 PM",
-      "1 PM", "2 PM", "3 PM", "4 PM", "5 PM",
-    ];
-    List<double> aqiValues = [60, 80, 100, 90, 110, 120, 130, 150, 160, 170];
-    List<double> pm25Values = [30, 40, 50, 40, 45, 50, 55, 60, 65, 70];
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          "24 Hour Prediction",
-          style: titleTextStyle,
-        ),
-        SizedBox(height: 10),
-        _buildLegend(),
-        SizedBox(height: 20),
-        Container(
-          height: 300,
-          child: LineChart(
-            LineChartData(
-              gridData: FlGridData(
-                show: true,
-                drawVerticalLine: false,
-                horizontalInterval: 20,
-                getDrawingHorizontalLine: (value) {
-                  return FlLine(
-                    color: Colors.grey[300]!,
-                    strokeWidth: 1,
-                  );
-                },
-              ),
-              titlesData: FlTitlesData(
-                leftTitles: SideTitles(
-                  showTitles: true,
-                  interval: 20,
-                  getTextStyles: (context, value) => TextStyle(
-                    color: Colors.black54,
-                    fontSize: 12,
-                  ),
-                  reservedSize: 30,
-                  margin: 10,
-                ),
-                bottomTitles: SideTitles(
-                  showTitles: true,
-                  reservedSize: 30,
-                  rotateAngle: 45,
-                  getTextStyles: (context, value) => TextStyle(
-                    color: Colors.black54,
-                    fontSize: 12,
-                  ),
-                  getTitles: (value) {
-                    int index = value.toInt();
-                    return index >= 0 && index < labels.length
-                        ? labels[index]
-                        : '';
-                  },
-                ),
-                // Hide the right titles
-                rightTitles: SideTitles(showTitles: false),
-              ),
-              borderData: FlBorderData(
-                show: true,
-                border: Border.all(
-                  color: Colors.grey,
-                  width: 1,
-                ),
-              ),
-              minY: 0,
-              maxY: 200,
-              lineBarsData: [
-                _buildLineBarData(aqiValues, Colors.red, "AQI"),
-                _buildLineBarData(pm25Values, Colors.blue, "PM2.5"),
-              ],
-              lineTouchData: LineTouchData(
-                touchTooltipData: LineTouchTooltipData(
-                  tooltipBgColor: Colors.grey[700],
-                  getTooltipItems: (touchedSpots) {
-                    return touchedSpots.map((LineBarSpot touchedSpot) {
-                      return LineTooltipItem(
-                        '${touchedSpot.barIndex == 0 ? "AQI" : "PM2.5"}: ${touchedSpot.y.toInt()}',
-                        const TextStyle(color: Colors.white),
-                      );
-                    }).toList();
-                  },
-                ),
+  /// ==========================
+  /// APP BAR (Dark/Light Mode Toggle)
+  /// ==========================
+  AppBar _buildAppBar() {
+    return AppBar(
+      backgroundColor: _isDarkMode ? darkBackground : lightBackground,
+      elevation: 0,
+      leading: IconButton(
+        icon: Icon(CupertinoIcons.bars,
+            color: _isDarkMode ? Colors.white : Colors.black),
+        onPressed: () => _scaffoldKey.currentState!.openDrawer(),
+      ),
+      actions: [
+        Row(
+          children: [
+            Icon(
+              _isDarkMode
+                  ? CupertinoIcons.moon_fill
+                  : CupertinoIcons.sun_max_fill,
+              color: _isDarkMode ? Colors.white : Colors.black,
+              size: 24,
+            ),
+            Transform.scale(
+              scale: 0.8,
+              child: Switch(
+                value: _isDarkMode,
+                onChanged: _toggleTheme,
+                activeColor: Colors.orange,
+                inactiveThumbColor: Colors.grey,
+                activeTrackColor: Colors.orange.withOpacity(0.5),
+                inactiveTrackColor: Colors.grey.withOpacity(0.5),
               ),
             ),
-          ),
-
+            SizedBox(width: 10),
+          ],
         ),
       ],
     );
   }
 
-  Widget _buildLegend() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.start,
-      children: [
-        _buildLegendItem(Colors.red, "AQI"),
-        SizedBox(width: 10),
-        _buildLegendItem(Colors.blue, "PM2.5"),
-      ],
-    );
-  }
-
-  Widget _buildLegendItem(Color color, String label) {
-    return Row(
-      children: [
-        Container(
-          width: 16,
-          height: 16,
-          color: color,
-        ),
-        SizedBox(width: 4),
-        Text(
-          label,
-          style: TextStyle(color: Colors.black54, fontSize: 14),
-        ),
-      ],
-    );
-  }
-
-  LineChartBarData _buildLineBarData(List<double> values, Color lineColor, String label) {
-    return LineChartBarData(
-      spots: values.asMap().entries.map((e) => FlSpot(e.key.toDouble(), e.value)).toList(),
-      isCurved: false,
-      colors: [lineColor],
-      dotData: FlDotData(show: true),
-      belowBarData: BarAreaData(show: false),
-      barWidth: 3,
-    );
-  }
-
-  Widget _buildAQIBox(String city, String date, String time, double aqi, int stationId) {
-    var aqiProperties = getAQIProperties(aqi);
-
-    return Container(
-      padding: const EdgeInsets.all(16.0),
-      decoration: boxDecoration,
+  /// ==========================
+  /// SIDE MENU (Drawer)
+  /// ==========================
+  Widget _buildDrawer() {
+    return Drawer(
+      backgroundColor: _isDarkMode ? darkBackground : lightBackground,
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          SizedBox(height: 50),
+          ListTile(
+            leading: Icon(CupertinoIcons.house_fill,
+                color: _isDarkMode ? Colors.white : Colors.black),
+            title: Text("Home",
+                style: TextStyle(
+                    color: _isDarkMode ? Colors.white : Colors.black)),
+            onTap: () => Navigator.pop(context),
+          ),
+          ListTile(
+            leading: Icon(CupertinoIcons.location_fill,
+                color: _isDarkMode ? Colors.white : Colors.black),
+            title: Text("Path Finder",
+                style: TextStyle(
+                    color: _isDarkMode ? Colors.white : Colors.black)),
+            onTap: () {
+              Navigator.pop(context); // ปิด Drawer ก่อน
+              Navigator.pushNamed(context, '/map');
+            },
+          ),
+          ListTile(
+            leading: Icon(CupertinoIcons.heart_fill,
+                color: _isDarkMode ? Colors.white : Colors.black),
+            title: Text("Favorite Locations",
+                style: TextStyle(
+                    color: _isDarkMode ? Colors.white : Colors.black)),
+            onTap: () => Navigator.pop(context),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// ==========================
+  /// AQI CARD
+  /// ==========================
+  Widget _buildNearestStationCard() {
+    int aqi = _nearestStation?["aqi"] ?? 0;
+    String level = _getAQILevel(aqi);
+    String advice = _getAQIAdvice(aqi);
+    Color color = _getAQIColor(aqi);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text(
+          _nearestStation?["station_name"] ?? "Unknown",
+          style: TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+            color: _isDarkMode ? Colors.white : Colors.black,
+          ),
+          textAlign: TextAlign.center,
+        ),
+        SizedBox(height: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(CupertinoIcons.time,
+                color: _isDarkMode ? Colors.white70 : Colors.black54, size: 18),
+            SizedBox(width: 5),
+            Text("Updated 1 hours ago",
+                style: TextStyle(
+                    color: _isDarkMode ? Colors.white70 : Colors.black54)),
+          ],
+        ),
+        SizedBox(height: 20),
+        Container(
+          height: 150,
+          width: 260,
+          child: Stack(
+            alignment: Alignment.center,
             children: [
-              Expanded(
+              CustomPaint(
+                size: Size(190, 100),
+                painter: HalfCirclePainter(color, aqi / 300),
+              ),
+              Positioned(
+                bottom: 15,
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(Icons.location_on, color: Colors.black54),
-                        SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            city,
-                            style: titleTextStyle,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
+                    Text(
+                      "$aqi",
+                      style: TextStyle(
+                          fontSize: 38,
+                          fontWeight: FontWeight.bold,
+                          color: color),
                     ),
-                    const SizedBox(height: 8),
-                    Text(date, style: TextStyle(color: Colors.black54)),
-                    const SizedBox(height: 4),
-                    Text(time, style: TextStyle(color: Colors.black54)),
+                    SizedBox(height: 2),
+                    Text(
+                      "AQI Index Quality",
+                      style: TextStyle(
+                        fontSize: 18,
+                        color: _isDarkMode ? Colors.white70 : Colors.black54,
+                      ),
+                    ),
                   ],
                 ),
               ),
-              _buildAQICircle(aqi, aqiProperties['level'], aqiProperties['color']),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 5,
-                height: 50,
-                color: aqiProperties['color'],
-              ),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  aqiProperties['description'],
-                  style: TextStyle(color: Colors.black),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Align(
-            alignment: Alignment.centerRight,
-            child: GestureDetector(
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => DetailsPage(
-                      stationId: stationId,
-                    ),
-                  ),
-                );
-              },
-              child: Text(
-                "See more details >>",
-                style: TextStyle(
-                  color: Colors.grey,
-                  decoration: TextDecoration.underline,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAQICircle(double aqi, String aqiLevel, Color aqiColor) {
-    return Container(
-      width: 150,
-      height: 150,
-      child: CustomPaint(
-        painter: AQICirclePainter(aqi.toInt()),
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                "AQI Value",
-                style: TextStyle(color: Colors.grey, fontSize: 14),
-              ),
-              Text(
-  "${aqi.toInt()}",
-  style: TextStyle(
-    fontSize: 28,
-    fontWeight: FontWeight.bold,
-    color: Colors.black,
-  ),
-),
-
-              Container(
-                margin: const EdgeInsets.only(top: 4),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: 2,
-                ),
-                decoration: BoxDecoration(
-                  color: aqiColor,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  aqiLevel,
-                  style: TextStyle(
-                    color: Colors.black,
-                    fontSize: 16,
-                  ),
-                ),
-              ),
             ],
           ),
         ),
-      ),
+        SizedBox(height: 25),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.privacy_tip, color: color, size: 28),
+            SizedBox(width: 5),
+            Text(
+              level,
+              style: TextStyle(
+                  fontSize: 18, fontWeight: FontWeight.bold, color: color),
+            ),
+          ],
+        ),
+        SizedBox(height: 10),
+        Text(
+          advice,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: _isDarkMode ? Colors.white70 : Colors.black87,
+          ),
+        ),
+      ],
     );
   }
 
-  Widget _buildCurrentStatBox(Map<String, dynamic> iaqi) {
-    List<MapEntry<String, dynamic>> entries = iaqi.entries.toList();
-
+  /// ==========================
+  /// 24 HOURS PREDICTION & HISTORY GRAPH
+  /// ==========================
+  Widget _buildAQIPredictionGraph() {
     return Container(
-      padding: const EdgeInsets.all(16.0),
-      decoration: boxDecoration,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            "Current Stat",
-            style: titleTextStyle,
-          ),
-          SizedBox(height: 8),
-          Divider(color: Colors.grey),
-          SizedBox(height: 16),
-          GridView.builder(
-            physics: NeverScrollableScrollPhysics(),
-            shrinkWrap: true,
-            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              crossAxisSpacing: 16.0,
-              childAspectRatio: 3,
-            ),
-            itemCount: entries.length,
-            itemBuilder: (context, index) {
-              var entry = entries[index];
-              return _buildStatTile(entry.key, (entry.value['v'] as num).toDouble());
-            },
+      padding: EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: _isDarkMode ? Color(0xFF545978) : Color(0xFFEDEDED),
+        borderRadius: BorderRadius.circular(15),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.2),
+            blurRadius: 8,
+            spreadRadius: 2,
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildStatTile(String statName, double? value) {
-    String fullName;
-    String condition;
-    Color barColor;
-    double barWidthFactor = 0.0;
-
-    switch (statName.toUpperCase()) {
-      case 'DEW':
-    fullName = 'Dew Point';
-    if (value == null) {
-        condition = 'No data';
-        barColor = Colors.grey;
-    } else if (value < 0) {
-        condition = 'Below Freezing';
-        barColor = Colors.lightBlue;
-        barWidthFactor = (value + 30) / 60; 
-        condition = 'Comfortable';
-        barColor = Colors.blue;
-        barWidthFactor = value / 30;
-    } else if (value < 20) {
-        condition = 'Moderate';
-        barColor = Colors.green;
-        barWidthFactor = value / 30;
-    } else {
-        condition = 'High';
-        barColor = Colors.red;
-        barWidthFactor = value / 30;
-    }
-    break;
-      case 'H':
-        fullName = 'Humidity';
-        if (value == null) {
-          condition = 'No data';
-          barColor = Colors.grey;
-        } else if (value < 30) {
-          condition = 'Very Low';
-          barColor = Colors.blue;
-          barWidthFactor = value / 100;
-        } else if (value <= 60) {
-          condition = 'Comfortable';
-          barColor = Colors.green;
-          barWidthFactor = value / 100;
-        } else {
-          condition = 'High';
-          barColor = Colors.red;
-          barWidthFactor = value / 100;
-        }
-        break;
-      case 'O3':
-        fullName = 'Ozone';
-        if (value == null) {
-          condition = 'No data';
-          barColor = Colors.grey;
-        } else if (value <= 50) {
-          condition = 'Good';
-          barColor = Colors.green;
-          barWidthFactor = value / 100;
-        } else if (value <= 100) {
-          condition = 'Moderate';
-          barColor = Colors.orange;
-          barWidthFactor = value / 150;
-        } else {
-          condition = 'Unhealthy';
-          barColor = Colors.red;
-          barWidthFactor = value / 200;
-        }
-        break;
-      case 'P':
-        fullName = 'Pressure';
-        if (value == null) {
-          condition = 'No data';
-          barColor = Colors.grey;
-        } else if (value < 1000) {
-          condition = 'Low';
-          barColor = Colors.orange;
-          barWidthFactor = value / 1100;
-        } else if (value <= 1025) {
-          condition = 'Normal';
-          barColor = Colors.green;
-          barWidthFactor = value / 1100;
-        } else {
-          condition = 'High';
-          barColor = Colors.blue;
-          barWidthFactor = value / 1100;
-        }
-        break;
-      case 'PM10':
-        fullName = 'PM10';
-        if (value == null) {
-          condition = 'No data';
-          barColor = Colors.grey;
-        } else if (value <= 54) {
-          condition = 'Good';
-          barColor = Colors.green;
-          barWidthFactor = value / 200;
-        } else if (value <= 154) {
-          condition = 'Moderate';
-          barColor = Colors.orange;
-          barWidthFactor = value / 200;
-        } else {
-          condition = 'Unhealthy';
-          barColor = Colors.red;
-          barWidthFactor = value / 300;
-        }
-        break;
-      case 'PM25':
-        fullName = 'PM2.5';
-        if (value == null) {
-          condition = 'No data';
-          barColor = Colors.grey;
-        } else if (value <= 12) {
-          condition = 'Good';
-          barColor = Colors.green;
-          barWidthFactor = value / 100;
-        } else if (value <= 35.4) {
-          condition = 'Moderate';
-          barColor = Colors.orange;
-          barWidthFactor = value / 100;
-        } else {
-          condition = 'Unhealthy';
-          barColor = Colors.red;
-          barWidthFactor = value / 150;
-        }
-        break;
-      case 'R':
-        fullName = 'Rainfall';
-        if (value == null) {
-          condition = 'No data';
-          barColor = Colors.grey;
-        } else if (value < 2) {
-          condition = 'Light';
-          barColor = Colors.blue;
-          barWidthFactor = value / 20;
-        } else if (value <= 10) {
-          condition = 'Moderate';
-          barColor = Colors.green;
-          barWidthFactor = value / 20;
-        } else {
-          condition = 'Heavy';
-          barColor = Colors.red;
-          barWidthFactor = value / 20;
-        }
-        break;
-      case 'SO2':
-        fullName = 'Sulfur Dioxide';
-        if (value == null) {
-          condition = 'No data';
-          barColor = Colors.grey;
-        } else if (value <= 35) {
-          condition = 'Good';
-          barColor = Colors.green;
-          barWidthFactor = value / 100;
-        } else if (value <= 75) {
-          condition = 'Moderate';
-          barColor = Colors.orange;
-          barWidthFactor = value / 100;
-        } else {
-          condition = 'Unhealthy';
-          barColor = Colors.red;
-          barWidthFactor = value / 150;
-        }
-        break;
-      case 'T':
-        fullName = 'Temperature';
-        if (value == null) {
-          condition = 'No data';
-          barColor = Colors.grey;
-        } else if (value < 10) {
-          condition = 'Cold';
-          barColor = Colors.blue;
-          barWidthFactor = value / 40;
-        } else if (value <= 25) {
-          condition = 'Comfortable';
-          barColor = Colors.green;
-          barWidthFactor = value / 40;
-        } else {
-          condition = 'Hot';
-          barColor = Colors.red;
-          barWidthFactor = value / 40;
-        }
-        break;
-      case 'W':
-        fullName = 'Wind Speed';
-        if (value == null) {
-          condition = 'No data';
-          barColor = Colors.grey;
-        } else if (value < 5) {
-          condition = 'Calm';
-          barColor = Colors.blue;
-          barWidthFactor = value / 20;
-        } else if (value <= 10) {
-          condition = 'Moderate';
-          barColor = Colors.green;
-          barWidthFactor = value / 20;
-        } else {
-          condition = 'Strong';
-          barColor = Colors.red;
-          barWidthFactor = value / 20;
-        }
-        break;
-      default:
-        fullName = statName;
-        condition = 'No data';
-        barColor = Colors.grey;
-        barWidthFactor = 0.0;
-    }
-
-    return SingleChildScrollView(// Wrap the entire Column in a scrollable view
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Title & Toggle Button (Forecast / History)
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                fullName,
-                style: TextStyle(fontSize: 16, color: Colors.grey),
+                _isHistoryMode ? "History" : "24 Hours Forecast",
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: _isDarkMode ? Colors.white : Colors.black,
+                ),
               ),
-              Text(
-                value?.toStringAsFixed(2) ?? 'No data',
-                style: TextStyle(fontSize: 16, color: Colors.black),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orange,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                ),
+                onPressed: () {
+                  setState(() {
+                    _isHistoryMode = !_isHistoryMode;
+                  });
+                  if (_isHistoryMode) {
+                    // เมื่อเปลี่ยนเป็น History mode ให้ดึงข้อมูลประวัติจาก API
+                    _fetchHistoryData();
+                  }
+                },
+                child: Text(
+                  _isHistoryMode ? "View forecast" : "View history",
+                  style: TextStyle(color: Colors.white),
+                ),
               ),
             ],
           ),
-          SizedBox(height: 2),
-          Container(
-            height: 2,  // Height of the bar
-            width: double.infinity,
-            color: Colors.grey[300],
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: FractionallySizedBox(
-                widthFactor: (barWidthFactor != null && barWidthFactor >= 0) ? barWidthFactor : 0.0,
-                child: Container(
-                  height: 2,
-                  color: barColor,
-                ),
-              ),
-            ),
-          ),
-          SizedBox(height: 2),
-          Text(
-            condition,
-            style: TextStyle(color: Colors.grey, fontSize: 12),
-          ),
+          SizedBox(height: 15),
+          // Forecast หรือ History Graph Section
+          _isHistoryMode ? _buildHistoryGraph() : _buildLineChartPredict(),
+          SizedBox(height: 15),
+          // AQI Color Labels
+          _buildAQILabels(),
         ],
       ),
     );
   }
 
-  Widget _buildLastUpdated(int minutesAgo) {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Text(
-        "Latest update $minutesAgo minutes ago",
-        style: TextStyle(color: Colors.black54, fontSize: 14),
+  /// ==========================
+  /// History Graph Section
+  /// ==========================
+  Widget _buildHistoryGraph() {
+    double maxY = (_historyData.isNotEmpty)
+        ? ((_historyData.map((spot) => spot.y).reduce(math.max) + 50) / 50)
+                .ceil() *
+            50.0
+        : 300;
+
+    double chartWidth =
+        (_historyData.isNotEmpty ? _historyData.last.x + 1 : 10) * 40;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // ปุ่มเลือก view (month/day/hour)
+        Row(
+          mainAxisAlignment: MainAxisAlignment.start,
+          children: [
+            Text(
+              "View by: ",
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: _isDarkMode ? Colors.white : Colors.black,
+              ),
+            ),
+            _buildHistoryFilterButton("month"),
+            _buildHistoryFilterButton("day"),
+            _buildHistoryFilterButton("hour"),
+          ],
+        ),
+        SizedBox(height: 15),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Container(
+            width: math.max(300, chartWidth),
+            height: 250,
+            child: LineChart(
+              LineChartData(
+                minX: 0,
+                maxX: _historyData.isNotEmpty ? _historyData.last.x + 1 : 10,
+                minY: 0,
+                maxY: maxY,
+                titlesData: FlTitlesData(
+                  leftTitles: SideTitles(
+                    showTitles: true,
+                    interval: 50,
+                    getTitles: (value) => value.toInt().toString(),
+                    getTextStyles: (context, value) => TextStyle(
+                      color: _isDarkMode ? Colors.white : Colors.black,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    reservedSize: 40,
+                  ),
+                  bottomTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 70,
+                    interval: 1,
+                    getTitles: (value) {
+                      int index = value.toInt();
+                      if (index < 0 || index >= _historyLabels.length)
+                        return '';
+
+                      String rawLabel = _historyLabels[index];
+                      String formattedLabel = rawLabel;
+
+                      if (_selectedHistoryView == "month" &&
+                          rawLabel.contains("-")) {
+                        List<String> parts = rawLabel.split("-");
+                        if (parts.length == 2) {
+                          Map<String, String> monthMap = {
+                            "01": "Jan",
+                            "02": "Feb",
+                            "03": "Mar",
+                            "04": "Apr",
+                            "05": "May",
+                            "06": "Jun",
+                            "07": "Jul",
+                            "08": "Aug",
+                            "09": "Sep",
+                            "10": "Oct",
+                            "11": "Nov",
+                            "12": "Dec"
+                          };
+                          formattedLabel =
+                              "${monthMap[parts[1]] ?? parts[1]} ${parts[0]}";
+                        }
+                      }
+
+                      double aqiValue = _historyData[index].y;
+                      Color aqiColor = _getAQIColor(aqiValue);
+
+                      return "$formattedLabel\nAQI\n${aqiValue.toInt()}";
+                    },
+                    getTextStyles: (context, value) {
+                      int index = value.toInt();
+                      if (index < 0 || index >= _historyData.length)
+                        return TextStyle(fontSize: 10);
+
+                      double aqiValue = _historyData[index].y;
+                      Color aqiColor = _getAQIColor(aqiValue);
+
+                      return TextStyle(
+                        fontSize: 10,
+                        color: aqiColor,
+                        fontWeight: FontWeight.bold,
+                      );
+                    },
+                    margin: 10,
+                  ),
+                  topTitles: SideTitles(showTitles: false),
+                  rightTitles: SideTitles(showTitles: false),
+                ),
+                gridData: FlGridData(show: false),
+                borderData: FlBorderData(
+                  show: true,
+                  border: Border.all(color: Colors.grey),
+                ),
+                lineBarsData: [
+                  LineChartBarData(
+                    spots: _historyData,
+                    isCurved: true,
+                    colors: [_isDarkMode ? Colors.white : Colors.black],
+                    barWidth: 3,
+                    dotData: FlDotData(show: true),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHistoryFilterButton(String type) {
+    bool isSelected = _selectedHistoryView == type;
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _selectedHistoryView = type;
+        });
+        _fetchHistoryData();
+      },
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        margin: EdgeInsets.symmetric(horizontal: 5),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.orange : Colors.grey[400],
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(
+          type.toUpperCase(),
+          style: TextStyle(color: isSelected ? Colors.white : Colors.black),
+        ),
       ),
     );
   }
 
-  Color _getAQIColor(double aqi) {
-    return getAQIProperties(aqi)['color'];
-  }
+  /// ==========================
+  /// ฟังก์ชันสุ่มค่าประวัติ AQI (สำหรับ Forecast แบบเก่า)
+  /// ==========================
+  void _generateRandomHistoryData() {
+    _historyData.clear();
+    _historyLabels.clear();
+    Random random = Random();
 
-  Map<String, dynamic> getAQIProperties(double aqi) {
-    List<Map<String, dynamic>> aqiLevels = [
-      {
-        "max": 50,
-        "color": Color(0xFFB5F379),
-        "level": "Good",
-        "description": "Air quality is good. It's a great day to be outside!"
-      },
-      {
-        "max": 100,
-        "color": Color(0xFFFFF47E),
-        "level": "Moderate",
-        "description": "Air quality is acceptable. However, there may be a risk for some people, particularly those who are unusually sensitive to air pollution."
-      },
-      {
-        "max": 150,
-        "color": Color(0xFFFEB14E),
-        "level": "Less Unhealthy",
-        "description": "Members of sensitive groups may experience health effects. The general public is less likely to be affected."
-      },
-      {
-        "max": 200,
-        "color": Color(0xFFFF6274),
-        "level": "Unhealthy",
-        "description": "Everyone may begin to experience health effects; members of sensitive groups may experience more serious health effects."
-      },
-      {
-        "max": 300,
-        "color": Color(0xFFB46EBC),
-        "level": "Very Unhealthy",
-        "description": "Health alert: everyone may experience more serious health effects."
-      },
-      {
-        "max": double.infinity,
-        "color": Color(0xFF975174),
-        "level": "Hazardous",
-        "description": "Health warnings of emergency conditions. The entire population is more likely to be affected."
-      },
-    ];
-
-    for (var level in aqiLevels) {
-      if (aqi <= level["max"]) {
-        return level;
-      }
+    int dataPoints = 24;
+    for (int i = 0; i < dataPoints; i++) {
+      int aqi = random.nextInt(300) + 1;
+      _historyData.add(FlSpot(i.toDouble(), aqi.toDouble()));
+      _historyLabels.add("${i}:00");
     }
-    return aqiLevels.last;
+    setState(() {});
   }
-}
 
-class Forecast {
-  final int aqi;
-  final String city;
-  final Map<String, dynamic> iaqi;
-  final int stationId;
-  final DateTime time;
+  /// ==========================
+  /// ฟังก์ชันแปลงหมายเลขเดือนเป็นชื่อย่อ
+  /// ==========================
+  String _getMonthShortName(int month) {
+    List<String> months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec"
+    ];
+    return months[month - 1];
+  }
 
-  Forecast({required this.aqi, required this.city, required this.iaqi, required this.stationId, required this.time});
-
-  factory Forecast.fromJson(Map<String, dynamic> json) {
-    return Forecast(
-      aqi: json['data']['aqi'],
-      city: json['data']['city']['name'],
-      iaqi: json['data']['iaqi'],
-      stationId: json['data']['idx'],
-      time: DateTime.parse(json['data']['time']['s']),
+  /// ==========================
+  /// สร้าง Label สี AQI (รองรับ 2 บรรทัด)
+  /// ==========================
+  Widget _buildAQILabels() {
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _buildAQILabel("Good", Color(0xFFABD162)),
+            SizedBox(width: 15),
+            _buildAQILabel("Moderate", Color(0xFFF8D461)),
+            SizedBox(width: 15),
+            _buildAQILabel("Unhealthy (SG)", Color(0xFFFB9956)),
+          ],
+        ),
+        SizedBox(height: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _buildAQILabel("Unhealthy", Color(0xFFF6686A)),
+            SizedBox(width: 15),
+            _buildAQILabel("Very Unhealthy", Color(0xFFA47DB8)),
+            SizedBox(width: 15),
+            _buildAQILabel("Hazardous", Color(0xFFA07785)),
+          ],
+        ),
+      ],
     );
   }
+
+  Widget _buildAQILabel(String text, Color color) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+          ),
+        ),
+        SizedBox(width: 5),
+        Text(
+          text,
+          style: TextStyle(
+            color: _isDarkMode ? Colors.white : Colors.black,
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLineChartPredict() {
+    double maxY = ((_getMaxAQI() + 50) / 50).ceil() * 50.0;
+    DateTime now = DateTime.now();
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Container(
+        width: 2500,
+        height: 320,
+        child: LineChart(
+          LineChartData(
+            minX: -1,
+            maxX: _aqiData.isNotEmpty ? _aqiData.last.x + 2 : 25,
+            minY: 0,
+            maxY: maxY,
+            titlesData: FlTitlesData(
+              bottomTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 70,
+                interval: 1,
+                getTitles: (value) {
+                  int index = value.toInt();
+                  if (index < 0 || index >= _aqiData.length) return '';
+
+                  DateTime timeLabel = now.add(Duration(hours: index));
+                  bool isCurrentHour = timeLabel.hour == now.hour;
+
+                  double currentAQI =
+                      _nearestStation?["aqi"]?.toDouble() ?? 0.0;
+                  double aqiValue =
+                      isCurrentHour ? currentAQI : _aqiData[index].y;
+
+                  String formattedTime = isCurrentHour
+                      ? "${timeLabel.hour}:${timeLabel.minute.toString().padLeft(2, '0')}"
+                      : "${timeLabel.hour}:00";
+
+                  return "$formattedTime\nAQI\n${aqiValue.toInt()}";
+                },
+                getTextStyles: (context, value) {
+                  int index = value.toInt();
+                  if (index < 0 || index >= _aqiData.length)
+                    return TextStyle(fontSize: 12);
+                  double currentAQI =
+                      _nearestStation?["aqi"]?.toDouble() ?? 0.0;
+                  double aqiValue =
+                      (index == now.hour) ? currentAQI : _aqiData[index].y;
+                  return TextStyle(
+                    color: _getAQIColor(aqiValue),
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  );
+                },
+                margin: 10,
+              ),
+              leftTitles: SideTitles(
+                showTitles: true,
+                interval: 50,
+                getTitles: (value) => value.toInt().toString(),
+                getTextStyles: (context, value) => TextStyle(
+                  color: _isDarkMode ? Colors.white : Colors.black,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+                reservedSize: 40,
+                margin: 8,
+              ),
+              topTitles: SideTitles(showTitles: false),
+              rightTitles: SideTitles(showTitles: false),
+            ),
+            gridData: FlGridData(show: false),
+            borderData: FlBorderData(
+              show: true,
+              border: Border.all(
+                color: _isDarkMode ? Colors.white54 : Colors.black54,
+              ),
+            ),
+            lineBarsData: [
+              LineChartBarData(
+                spots: _aqiData,
+                isCurved: true,
+                colors: [_isDarkMode ? lightBackground : darkBackground],
+                barWidth: 3,
+                dotData: FlDotData(show: true),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// ==========================
+  /// Helper Function to Get Max AQI
+  /// ==========================
+  double _getMaxAQI() {
+    if (_aqiData.isEmpty) return 0.0;
+    return _aqiData.map((spot) => spot.y).reduce(max);
+  }
+
+  /// ==========================
+  /// AQI Lable, Level, Advice, Color
+  /// ==========================
+  String _getAQILevel(int aqi) {
+    if (aqi <= 50) return "Good";
+    if (aqi <= 100) return "Moderate";
+    if (aqi <= 150) return "Unhealthy for Sensitive Groups";
+    if (aqi <= 200) return "Unhealthy";
+    if (aqi <= 300) return "Very Unhealthy";
+    return "Hazardous";
+  }
+
+  String _getAQIAdvice(int aqi) {
+    if (aqi <= 50) return "Air quality is good. No health risk.";
+    if (aqi <= 100)
+      return "Air is acceptable. Sensitive individuals should be cautious.";
+    if (aqi <= 150) return "Sensitive groups should reduce outdoor activity.";
+    if (aqi <= 200) return "Everyone should limit outdoor activity.";
+    if (aqi <= 300) return "Health warnings issued. Stay indoors.";
+    return "Serious health risk. Avoid outdoor activities!";
+  }
+
+  Color _getAQIColor(num aqi) {
+    if (aqi <= 50) return Color(0xFFABD162);
+    if (aqi <= 100) return Color(0xFFF8D461);
+    if (aqi <= 150) return Color(0xFFFB9956);
+    if (aqi <= 200) return Color(0xFFF6686A);
+    if (aqi <= 300) return Color(0xFFA47DB8);
+    return Color(0xFFA07785);
+  }
 }
 
-class AQICirclePainter extends CustomPainter {
-  final int aqi;
+/// ==========================
+/// HALF CIRCLE PAINTER
+/// ==========================
+class HalfCirclePainter extends CustomPainter {
+  final Color color;
+  final double progress;
 
-  AQICirclePainter(this.aqi);
+  HalfCirclePainter(this.color, this.progress);
 
   @override
   void paint(Canvas canvas, Size size) {
-    final rect = Rect.fromLTRB(0, 0, size.width, size.height);
-    final startAngle = 3.14 * 0.75;
-    final sweepAngle = 3.14 * 1.5;
-    final useCenter = false;
-
-    final colors = [
-      Color(0xFFB5F379),
-      Color(0xFFFFF47E),
-      Color(0xFFFEB14E),
-      Color(0xFFFF6274),
-      Color(0xFFB46EBC),
-      Color(0xFF975174),
-    ];
-
-    final paint = Paint()
+    Paint paint = Paint()
+      ..color = color
+      ..strokeWidth = 15
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 15;
+      ..strokeCap = StrokeCap.round;
 
-    for (int i = 0; i < colors.length; i++) {
-      paint.color = colors[i];
-      double segmentSweepAngle = sweepAngle / colors.length;
-      canvas.drawArc(rect, startAngle + segmentSweepAngle * i, segmentSweepAngle, useCenter, paint);
-    }
-
-    int colorIndex;
-    if (aqi <= 50) {
-      colorIndex = 0;
-    } else if (aqi <= 100) {
-      colorIndex = 1;
-    } else if (aqi <= 150) {
-      colorIndex = 2;
-    } else if (aqi <= 200) {
-      colorIndex = 3;
-    } else if (aqi <= 300) {
-      colorIndex = 4;
-    } else {
-      colorIndex = 5;
-    }
-
-    double aqiStartAngle = startAngle + (sweepAngle / colors.length) * colorIndex;
-    double segmentMiddleAngle = aqiStartAngle + (sweepAngle / colors.length) / 2;
-
-    double radius = (size.width / 2) - 1;
-
-    Offset circleCenter = Offset(
-      size.width / 2 + radius * cos(segmentMiddleAngle),
-      size.height / 2 + radius * sin(segmentMiddleAngle),
+    canvas.drawArc(
+      Rect.fromLTWH(0, 0, size.width, size.height * 2),
+      math.pi,
+      math.pi * progress,
+      false,
+      paint,
     );
-
-    final whiteCirclePaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-
-    final whiteCircleBorderPaint = Paint()
-      ..color = colors[colorIndex]
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 4;
-
-    canvas.drawCircle(circleCenter, 10, whiteCirclePaint);
-    canvas.drawCircle(circleCenter, 10, whiteCircleBorderPaint);
   }
 
   @override
   bool shouldRepaint(CustomPainter oldDelegate) => true;
 }
-
-final boxDecoration = BoxDecoration(
-  color: Colors.white,
-  borderRadius: BorderRadius.circular(5),
-  boxShadow: [
-    BoxShadow(
-      color: Colors.black12,
-      blurRadius: 10,
-      spreadRadius: 1,
-    ),
-  ],
-);
-
-final TextStyle titleTextStyle = TextStyle(fontSize: 18, fontWeight: FontWeight.bold);
