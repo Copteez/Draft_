@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'config.dart';
 import 'network_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class LoginScreen extends StatefulWidget {
   final AppConfig config;
@@ -58,6 +59,12 @@ class _LoginScreenState extends State<LoginScreen> {
         try {
           final data = jsonDecode(response.body);
           if (data["success"] == true) {
+            final user = data["user"];
+            final userId = user["user_id"]; // ดึง user_id จาก response
+            // บันทึก user_id ลง SharedPreferences
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setInt("user_id", userId);
+
             _showSuccess("Login successful 😊");
             await Future.delayed(Duration(milliseconds: 500));
             Navigator.pushReplacementNamed(context, '/home');

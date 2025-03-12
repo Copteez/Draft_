@@ -14,14 +14,21 @@ class CombinedSearchSection extends StatefulWidget {
   }) onSubmit;
   final VoidCallback onUseCurrentLocationForStart;
   final String googleApiKey;
+  final bool isDarkMode; // Added parameter
 
-  // สำหรับ Source และ Parameter
+  // For Source and Parameter
   final String selectedSource;
   final List<String> sources;
   final Function(String?) onSourceChanged;
   final String selectedParameter;
   final List<String> parameters;
   final Function(String?) onParameterChanged;
+
+  // New properties
+  final bool isRouteLoading;
+  final bool markersLoaded;
+  final String? userId;
+  final LatLng? currentLocation;
 
   const CombinedSearchSection({
     Key? key,
@@ -34,6 +41,11 @@ class CombinedSearchSection extends StatefulWidget {
     required this.selectedParameter,
     required this.parameters,
     required this.onParameterChanged,
+    required this.isRouteLoading,
+    required this.markersLoaded,
+    required this.isDarkMode, // Added here
+    this.userId,
+    this.currentLocation,
   }) : super(key: key);
 
   @override
@@ -43,6 +55,7 @@ class CombinedSearchSection extends StatefulWidget {
 class _CombinedSearchSectionState extends State<CombinedSearchSection> {
   final TextEditingController _startController = TextEditingController();
   final TextEditingController _endController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
 
   List<Map<String, dynamic>> _startSuggestions = [];
   List<Map<String, dynamic>> _endSuggestions = [];
@@ -53,20 +66,62 @@ class _CombinedSearchSectionState extends State<CombinedSearchSection> {
   String _selectedTravelMode = 'driving';
   final List<String> _travelModes = ['driving', 'walking', 'bicycling'];
 
-  // เก็บพิกัดที่ได้จาก Place Details API
   LatLng? _startLatLng;
   LatLng? _endLatLng;
 
-  // ควบคุมการแสดง/ซ่อน UI Search
-  bool _isExpanded = false;
+  Future<void> _logSearchQuery(
+      String start, String end, String travelMode) async {
+    if (widget.userId == null) return;
+    final url = Uri.parse(
+        'https://3e24-2001-fb1-178-76e-402b-db55-4cab-efc.ngrok-free.app/api/history-search');
+    double startLat = _startLatLng?.latitude ??
+        ((start.trim().toLowerCase() == "your location" &&
+                widget.currentLocation != null)
+            ? widget.currentLocation!.latitude
+            : 0);
+    double startLon = _startLatLng?.longitude ??
+        ((start.trim().toLowerCase() == "your location" &&
+                widget.currentLocation != null)
+            ? widget.currentLocation!.longitude
+            : 0);
+    double endLat = _endLatLng?.latitude ?? 0;
+    double endLon = _endLatLng?.longitude ?? 0;
 
-  void _toggleExpanded() {
+    try {
+      await http.post(url,
+          headers: {"Content-Type": "application/json"},
+          body: jsonEncode({
+            "user_id": widget.userId,
+            "start_location": start,
+            "start_lat": startLat,
+            "start_lon": startLon,
+            "end_location": end,
+            "end_lat": endLat,
+            "end_lon": endLon,
+          }));
+    } catch (e) {
+      print("Error logging search query: $e");
+    }
+  }
+
+  void _clearStartInput() {
     setState(() {
-      _isExpanded = !_isExpanded;
+      _startController.clear();
+      _startLatLng = null;
+      _startSuggestions = [];
+      _isSearchingStart = false;
     });
   }
 
-  /// ดึง autocomplete suggestions สำหรับ Start location (จำกัดให้ในไทย)
+  void _clearEndInput() {
+    setState(() {
+      _endController.clear();
+      _endSuggestions = [];
+      _isSearchingEnd = false;
+      _endLatLng = null;
+    });
+  }
+
   Future<void> _fetchStartSuggestions(String query) async {
     if (query.isEmpty) {
       setState(() {
@@ -82,7 +137,6 @@ class _CombinedSearchSectionState extends State<CombinedSearchSection> {
         'input': query,
         'key': widget.googleApiKey,
         'components': 'country:th',
-        // ใช้ 'establishment' เพื่อให้ผลลัพธ์มีรายละเอียดมากขึ้น
         'types': 'establishment',
       },
     );
@@ -95,6 +149,7 @@ class _CombinedSearchSectionState extends State<CombinedSearchSection> {
               List<Map<String, dynamic>>.from(data['predictions']);
           _isSearchingStart = true;
         });
+        _scrollToBottom();
       }
     } catch (e) {
       print("Error fetching start suggestions: $e");
@@ -128,22 +183,31 @@ class _CombinedSearchSectionState extends State<CombinedSearchSection> {
               List<Map<String, dynamic>>.from(data['predictions']);
           _isSearchingEnd = true;
         });
+        _scrollToBottom();
       }
     } catch (e) {
       print("Error fetching end suggestions: $e");
     }
   }
 
-  /// เมื่อเลือก suggestion สำหรับ Start
-  Future<void> _selectStartSuggestion(Map<String, dynamic> suggestion) async {
-    final placeId = suggestion['place_id'];
+  void _scrollToBottom() {
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  Future<String> _getPlaceName(String placeId) async {
     final detailsUrl = Uri.https(
       'maps.googleapis.com',
       '/maps/api/place/details/json',
       {
         'place_id': placeId,
         'key': widget.googleApiKey,
-        'fields': 'formatted_address,geometry'
+        'fields': 'name,formatted_address,geometry'
       },
     );
     try {
@@ -151,19 +215,32 @@ class _CombinedSearchSectionState extends State<CombinedSearchSection> {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final result = data['result'];
-        String formattedAddress = result['formatted_address'] ?? "";
-        final geometry = result['geometry'];
-        final location = geometry != null ? geometry['location'] : null;
-        if (location != null) {
-          double lat = location['lat'];
-          double lng = location['lng'];
-          _startLatLng = LatLng(lat, lng);
-        }
+        return result['name'] ?? result['formatted_address'] ?? "";
+      }
+    } catch (e) {
+      print("Error fetching place name: $e");
+    }
+    return "";
+  }
+
+  Future<void> _selectStartSuggestion(Map<String, dynamic> suggestion) async {
+    final placeId = suggestion['place_id'];
+    String placeName = await _getPlaceName(placeId);
+    final detailsUrl = Uri.https(
+      'maps.googleapis.com',
+      '/maps/api/place/details/json',
+      {'place_id': placeId, 'key': widget.googleApiKey, 'fields': 'geometry'},
+    );
+    try {
+      final response = await http.get(detailsUrl);
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final location = data['result']['geometry']['location'];
         setState(() {
-          _startController.text = formattedAddress;
+          _startLatLng = LatLng(location['lat'], location['lng']);
+          _startController.text = placeName;
           _startSuggestions = [];
           _isSearchingStart = false;
-          _startIsCurrentLocation = false;
         });
       }
     } catch (e) {
@@ -171,33 +248,22 @@ class _CombinedSearchSectionState extends State<CombinedSearchSection> {
     }
   }
 
-  /// เมื่อเลือก suggestion สำหรับ End
   Future<void> _selectEndSuggestion(Map<String, dynamic> suggestion) async {
     final placeId = suggestion['place_id'];
+    String placeName = await _getPlaceName(placeId);
     final detailsUrl = Uri.https(
       'maps.googleapis.com',
       '/maps/api/place/details/json',
-      {
-        'place_id': placeId,
-        'key': widget.googleApiKey,
-        'fields': 'formatted_address,geometry'
-      },
+      {'place_id': placeId, 'key': widget.googleApiKey, 'fields': 'geometry'},
     );
     try {
       final response = await http.get(detailsUrl);
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final result = data['result'];
-        String formattedAddress = result['formatted_address'] ?? "";
-        final geometry = result['geometry'];
-        final location = geometry != null ? geometry['location'] : null;
-        if (location != null) {
-          double lat = location['lat'];
-          double lng = location['lng'];
-          _endLatLng = LatLng(lat, lng);
-        }
+        final location = data['result']['geometry']['location'];
         setState(() {
-          _endController.text = formattedAddress;
+          _endLatLng = LatLng(location['lat'], location['lng']);
+          _endController.text = placeName;
           _endSuggestions = [];
           _isSearchingEnd = false;
         });
@@ -207,7 +273,9 @@ class _CombinedSearchSectionState extends State<CombinedSearchSection> {
     }
   }
 
-  void _handleSubmit() {
+  Future<void> _handleSubmit() async {
+    await _logSearchQuery(
+        _startController.text, _endController.text, _selectedTravelMode);
     widget.onSubmit(
       _startController.text,
       _endController.text,
@@ -219,118 +287,79 @@ class _CombinedSearchSectionState extends State<CombinedSearchSection> {
 
   @override
   Widget build(BuildContext context) {
-    final bool isDarkMode = Theme.of(context).brightness == Brightness.dark;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // ปุ่ม Show/Hide Search
-        Align(
-          alignment: Alignment.center,
-          child: ElevatedButton(
-            onPressed: _toggleExpanded,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xfff9a72b),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  _isExpanded ? "Hide Search" : "Show Search",
-                  style: const TextStyle(color: Colors.white),
-                ),
-                const SizedBox(width: 8),
-                Icon(
-                  _isExpanded
-                      ? Icons.keyboard_arrow_up
-                      : Icons.keyboard_arrow_down,
-                  color: Colors.white,
-                ),
-              ],
-            ),
-          ),
-        ),
-        if (_isExpanded) ...[
-          const SizedBox(height: 8),
-          // Row สำหรับ Source และ Parameter Dropdown
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              MapSourceDropdown(
-                selectedSource: widget.selectedSource,
-                sources: widget.sources,
-                onChanged: widget.onSourceChanged,
-              ),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                decoration: BoxDecoration(
-                  color: const Color(0xfff9a72b),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    value: widget.selectedParameter,
-                    icon:
-                        const Icon(Icons.arrow_drop_down, color: Colors.white),
-                    dropdownColor: const Color(0xfff9a72b),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                    items: widget.parameters.map((param) {
-                      return DropdownMenuItem<String>(
-                        value: param,
-                        child: Text("Parameter: $param"),
-                      );
-                    }).toList(),
-                    onChanged: widget.onParameterChanged,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          // ส่วนของ TextField สำหรับ Start location พร้อม autocomplete
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+    // Use the explicit isDarkMode from widget instead of reading from Theme.of(context)
+    final bool isDark = widget.isDarkMode;
+    return SafeArea(
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height,
+        width: MediaQuery.of(context).size.width * 0.85,
+        child: Container(
+          color: isDark ? Colors.grey[900] : Colors.white,
+          padding: const EdgeInsets.all(16),
+          child: SingleChildScrollView(
+            controller: _scrollController,
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // Header with close button
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      "Search",
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: isDark ? Colors.white : Colors.black,
+                      ),
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.close,
+                          color: isDark ? Colors.white : Colors.black),
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                // Search input fields (moved to top)
                 TextField(
                   controller: _startController,
-                  style: TextStyle(
-                    color: isDarkMode ? Colors.white : Colors.black,
-                  ),
+                  style: TextStyle(color: isDark ? Colors.white : Colors.black),
                   decoration: InputDecoration(
-                    hintText: 'Start location',
+                    hintText: 'Start Location',
                     hintStyle: TextStyle(
-                      color: isDarkMode ? Colors.white70 : Colors.black54,
-                    ),
+                        color: isDark ? Colors.white70 : Colors.black54),
                     filled: true,
-                    fillColor: isDarkMode ? Colors.grey[800] : Colors.white,
+                    fillColor: isDark ? Colors.grey[800] : Colors.white,
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8.0),
                       borderSide: BorderSide.none,
                     ),
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        Icons.my_location,
-                        color: isDarkMode ? Colors.white : Colors.black,
-                      ),
-                      onPressed: () {
-                        widget.onUseCurrentLocationForStart();
-                        setState(() {
-                          _startController.text = "Your location";
-                          _startIsCurrentLocation = true;
-                          _startSuggestions = [];
-                          _isSearchingStart = false;
-                          _startLatLng = null;
-                        });
-                      },
+                    suffixIcon: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: Icon(Icons.clear,
+                              color: isDark ? Colors.white : Colors.black),
+                          onPressed: _clearStartInput,
+                        ),
+                        IconButton(
+                          icon: Icon(Icons.my_location,
+                              color: isDark ? Colors.white : Colors.black),
+                          onPressed: () {
+                            widget.onUseCurrentLocationForStart();
+                            setState(() {
+                              _startController.text = "Your location";
+                              _startIsCurrentLocation = true;
+                              _startSuggestions = [];
+                              _isSearchingStart = false;
+                              _startLatLng = null;
+                            });
+                          },
+                        ),
+                      ],
                     ),
                   ),
                   onChanged: (value) {
@@ -339,7 +368,7 @@ class _CombinedSearchSectionState extends State<CombinedSearchSection> {
                 ),
                 if (_isSearchingStart && _startSuggestions.isNotEmpty)
                   Container(
-                    color: isDarkMode ? Colors.grey[800] : Colors.white,
+                    color: isDark ? Colors.grey[800] : Colors.white,
                     child: ListView.builder(
                       shrinkWrap: true,
                       itemCount: _startSuggestions.length,
@@ -349,31 +378,31 @@ class _CombinedSearchSectionState extends State<CombinedSearchSection> {
                           title: Text(
                             suggestion['description'] ?? "",
                             style: TextStyle(
-                              color: isDarkMode ? Colors.white : Colors.black,
-                            ),
+                                color: isDark ? Colors.white : Colors.black),
                           ),
                           onTap: () => _selectStartSuggestion(suggestion),
                         );
                       },
                     ),
                   ),
-                const SizedBox(height: 8),
-                // TextField สำหรับ End location พร้อม autocomplete
+                const SizedBox(height: 16),
                 TextField(
                   controller: _endController,
-                  style: TextStyle(
-                    color: isDarkMode ? Colors.white : Colors.black,
-                  ),
+                  style: TextStyle(color: isDark ? Colors.white : Colors.black),
                   decoration: InputDecoration(
-                    hintText: 'End location',
+                    hintText: 'End Location',
                     hintStyle: TextStyle(
-                      color: isDarkMode ? Colors.white70 : Colors.black54,
-                    ),
+                        color: isDark ? Colors.white70 : Colors.black54),
                     filled: true,
-                    fillColor: isDarkMode ? Colors.grey[800] : Colors.white,
+                    fillColor: isDark ? Colors.grey[800] : Colors.white,
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8.0),
                       borderSide: BorderSide.none,
+                    ),
+                    suffixIcon: IconButton(
+                      icon: Icon(Icons.clear,
+                          color: isDark ? Colors.white : Colors.black),
+                      onPressed: _clearEndInput,
                     ),
                   ),
                   onChanged: (value) {
@@ -382,7 +411,7 @@ class _CombinedSearchSectionState extends State<CombinedSearchSection> {
                 ),
                 if (_isSearchingEnd && _endSuggestions.isNotEmpty)
                   Container(
-                    color: isDarkMode ? Colors.grey[800] : Colors.white,
+                    color: isDark ? Colors.grey[800] : Colors.white,
                     child: ListView.builder(
                       shrinkWrap: true,
                       itemCount: _endSuggestions.length,
@@ -392,78 +421,144 @@ class _CombinedSearchSectionState extends State<CombinedSearchSection> {
                           title: Text(
                             suggestion['description'] ?? "",
                             style: TextStyle(
-                              color: isDarkMode ? Colors.white : Colors.black,
-                            ),
+                                color: isDark ? Colors.white : Colors.black),
                           ),
                           onTap: () => _selectEndSuggestion(suggestion),
                         );
                       },
                     ),
                   ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          // Row สำหรับ travel mode และ Submit
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                Expanded(
-                  flex: 1,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    decoration: BoxDecoration(
-                      color: isDarkMode ? Colors.grey[800] : Colors.white,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: _selectedTravelMode,
-                        dropdownColor:
-                            isDarkMode ? Colors.grey[800] : Colors.white,
-                        style: TextStyle(
-                          color: isDarkMode ? Colors.white : Colors.black,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        items: _travelModes.map((mode) {
-                          return DropdownMenuItem<String>(
-                            value: mode,
-                            child: Text(mode),
-                          );
-                        }).toList(),
-                        onChanged: (String? newValue) {
-                          if (newValue != null) {
-                            setState(() {
-                              _selectedTravelMode = newValue;
-                            });
-                          }
-                        },
+                const SizedBox(height: 16),
+                // Moved Travel type dropdown under End Location field
+                Text(
+                  "Travel type:",
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: isDark ? Colors.white70 : Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  decoration: BoxDecoration(
+                    color: isDark ? Colors.grey[800] : Colors.white,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: _selectedTravelMode,
+                      dropdownColor: isDark ? Colors.grey[800] : Colors.white,
+                      style: TextStyle(
+                        color: isDark ? Colors.white : Colors.black,
+                        fontWeight: FontWeight.bold,
                       ),
+                      items: _travelModes.map((mode) {
+                        return DropdownMenuItem<String>(
+                          value: mode,
+                          child: Text(mode),
+                        );
+                      }).toList(),
+                      onChanged: (String? newValue) {
+                        if (newValue != null) {
+                          setState(() {
+                            _selectedTravelMode = newValue;
+                          });
+                        }
+                      },
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  flex: 2,
-                  child: ElevatedButton(
-                    onPressed: _handleSubmit,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xfff9a72b),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 20, vertical: 12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                    ),
-                    child: const Text("Submit"),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  onPressed: widget.isRouteLoading ? null : _handleSubmit,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xfff9a72b),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20)),
                   ),
+                  child: const Text("Submit"),
+                ),
+                const SizedBox(height: 24),
+                // Filter Section below search inputs
+                Text(
+                  "Filter",
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.white : Colors.black,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  "Sources:",
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: isDark ? Colors.white70 : Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                MapSourceDropdown(
+                  selectedSource: widget.selectedSource,
+                  sources: widget.sources,
+                  onChanged:
+                      widget.markersLoaded ? widget.onSourceChanged : null,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  "Parameter:",
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: isDark ? Colors.white70 : Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xfff9a72b),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: widget.selectedParameter,
+                      icon: const Icon(Icons.arrow_drop_down,
+                          color: Colors.white),
+                      dropdownColor: const Color(0xfff9a72b),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                      items: widget.parameters.map((param) {
+                        return DropdownMenuItem<String>(
+                          value: param,
+                          child: Text("Parameter: $param"),
+                        );
+                      }).toList(),
+                      onChanged: widget.markersLoaded
+                          ? widget.onParameterChanged
+                          : null,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                // Note below Filter section
+                Text(
+                  "Note: Filter settings do not affect path search results.",
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? Colors.white70 : Colors.black54,
+                  ),
+                  textAlign: TextAlign.center,
                 ),
               ],
             ),
           ),
-        ],
-      ],
+        ),
+      ),
     );
   }
 }

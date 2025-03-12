@@ -7,6 +7,12 @@ import 'register.dart';
 import 'home_page.dart';
 import 'config.dart';
 import 'map.dart';
+import 'details_page.dart';
+import 'favorite_path.dart';
+import 'history_path.dart';
+//import 'favorite_location.dart'; // ✅ เพิ่ม Favorite Location
+import 'history_location.dart';
+import 'favorite_location.dart'; // ✅ เพิ่ม Favorite Location
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,6 +41,19 @@ class MyApp extends StatelessWidget {
         '/register': (context) => RegisterScreen(config: config),
         '/home': (context) => HomePage(config: config),
         '/map': (context) => MapPage(config: config),
+        '/favorite_path': (context) => FavoritePathPage(config: config),
+        '/favorite_location': (context) => FavoriteLocationPage(config: config),
+        '/history_path': (context) => HistoryPathPage(config: config),
+        '/history_location': (context) => HistoryLocationPage(config: config),
+      },
+      onGenerateRoute: (settings) {
+        if (settings.name == '/details') {
+          final station = settings.arguments as Map<String, dynamic>;
+          return MaterialPageRoute(
+            builder: (context) => DetailsPage(config: config, station: station),
+          );
+        }
+        return null;
       },
     );
   }

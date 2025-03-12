@@ -1,3 +1,6 @@
+// แบ่งส่วนการค้นหาเส้นทางออกเป็น StatefulWidget สำหรับการใช้งานในหน้า MapPage
+// โดยมีการใช้งาน Google Places API ในการค้นหาสถานที่และดึงข้อมูลพิกัด
+// และส่งข้อมูลที่ได้ไปให้ parent ผ่าน callback function
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';

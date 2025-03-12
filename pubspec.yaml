@@ -21,6 +21,8 @@ dependencies:
   google_maps_routes: ^1.1.2
   google_maps_webservice: ^0.0.19  # Example for Google Maps Web Service API
   flutter_animate: ^4.1.1 
+  shared_preferences: ^2.0.15
+  dio: ^4.0.0
 
 
   # The "flutter_lints" package below contains a set of recommended lints to

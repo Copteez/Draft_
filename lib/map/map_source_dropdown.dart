@@ -1,3 +1,4 @@
+// This widget is used to display the dropdown for selecting the map source
 import 'package:flutter/material.dart';
 
 class MapSourceDropdown extends StatelessWidget {
