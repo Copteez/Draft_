@@ -26,13 +26,15 @@ if (flutterVersionName == null) {
 }
 
 android {
-    namespace = "com.example.googleroad"
-    compileSdk = flutter.compileSdkVersion
+    namespace = "com.example.googleroad"  // Make sure this matches your MainActivity package
+    compileSdk = 35  // Updated from 34 to 35 as required by the location plugin
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        // Enable desugaring explicitly
+        coreLibraryDesugaringEnabled true
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
     }
 
     kotlinOptions {
@@ -41,11 +43,14 @@ android {
 
 
     defaultConfig {
-        applicationId = "com.example.googleroad"
-        minSdk = 21
-        targetSdk = flutter.targetSdkVersion
+        applicationId = "com.example.googleroad"  // Make sure this matches namespace
+        minSdk = 21  // Set explicit value (Flutter's default is 16, but we need at least 21)
+        targetSdk = 35  // Also update target SDK to match compileSdk
         versionCode = flutterVersionCode.toInteger()
         versionName = flutterVersionName
+
+        // Enable multidex support
+        multiDexEnabled true
     }
 
     buildTypes {
@@ -57,4 +62,12 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Add multidex support
+    implementation "androidx.multidex:multidex:2.0.1"
+    
+    // Add Java 8 desugaring
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:1.1.5'
 }

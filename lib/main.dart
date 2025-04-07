@@ -1,7 +1,7 @@
-// this is the main file of the project
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:provider/provider.dart'; // Add this import
 import 'login.dart';
 import 'register.dart';
 import 'home_page.dart';
@@ -10,9 +10,11 @@ import 'map.dart';
 import 'details_page.dart';
 import 'favorite_path.dart';
 import 'history_path.dart';
-//import 'favorite_location.dart'; // ✅ เพิ่ม Favorite Location
 import 'history_location.dart';
-import 'favorite_location.dart'; // ✅ เพิ่ม Favorite Location
+import 'favorite_location.dart';
+import 'map/map_android_notification.dart';
+import 'home_page/utils/data_generation.dart' show getAQIPredictionData;
+import 'theme_provider.dart'; // Add this import
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,7 +23,13 @@ Future<void> main() async {
   // สร้าง instance ของ AppConfig
   final config = AppConfig.fromDotEnv();
 
-  runApp(MyApp(config: config));
+  runApp(
+    // Wrap with ChangeNotifierProvider
+    ChangeNotifierProvider(
+      create: (_) => ThemeProvider(),
+      child: MyApp(config: config),
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {
@@ -30,10 +38,26 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // ตอนนี้ทุกหน้าสามารถรับค่า config นี้ไปใช้งานได้
+    // Listen to the theme changes
+    final themeProvider = Provider.of<ThemeProvider>(context);
+
     return MaterialApp(
+      // Use the correct class name for the navigator key
+      navigatorKey: AndroidNotificationService.navigatorKey,
       title: 'Flutter Demo',
-      theme: ThemeData(useMaterial3: true),
+      theme: ThemeData(
+        useMaterial3: true,
+        brightness:
+            themeProvider.isDarkMode ? Brightness.dark : Brightness.light,
+        scaffoldBackgroundColor:
+            themeProvider.isDarkMode ? const Color(0xFF2C2C47) : Colors.white,
+        appBarTheme: AppBarTheme(
+          backgroundColor:
+              themeProvider.isDarkMode ? const Color(0xFF2C2C47) : Colors.white,
+          foregroundColor:
+              themeProvider.isDarkMode ? Colors.white : Colors.black,
+        ),
+      ),
       initialRoute: '/',
       routes: {
         '/': (context) => SplashScreen(config: config),

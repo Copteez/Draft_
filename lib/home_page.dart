@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart'; // Add this import
 import 'package:fl_chart/fl_chart.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:convert';
@@ -6,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import 'config.dart';
+import 'theme_provider.dart'; // Add this import
 import 'home_page/widgets/app_bar.dart';
 import 'home_page/widgets/drawer_widget.dart';
 import 'home_page/widgets/aqi_card.dart';
@@ -27,9 +29,12 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  bool _isDarkMode = true;
+  // Remove this line since theme is now managed by ThemeProvider
+  // bool _isDarkMode = true;
   bool _isHistoryMode = false;
   String _selectedHistoryView = "day";
+  bool _isLoading = false;
+  String? _error;
 
   // สำหรับ dropdown ของ sources
   String _selectedSource = "All";
@@ -44,6 +49,11 @@ class _HomePageState extends State<HomePage> {
   String _forecastText = "Loading...";
   double _highestAQI = 0.0;
 
+  // Add these new properties for prediction data
+  List<Map<String, dynamic>> _predictions = [];
+  bool _isLoadingPredictions = false;
+  String? _predictionError;
+
   late final NetworkService networkService;
 
   @override
@@ -55,26 +65,30 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _initializeData() async {
+    setState(() {
+      _isLoading = true;
+      _isLoadingPredictions = true;
+    });
+
     await determinePosition(
       onSuccess: (Position position) async {
         _currentPosition = position;
+        // First fetch the nearest station
         await _fetchNearestStation(position);
+        // Only after station is fetched, we call _loadAQIData
+        // We'll remove this call since _fetchNearestStation will now call _loadAQIData
       },
       onError: (error) {
+        setState(() {
+          _isLoading = false;
+          _isLoadingPredictions = false;
+        });
         _showError(error);
       },
     );
 
-    generateRandomAQIData(
-      onDataGenerated:
-          (List<FlSpot> aqiData, String forecastText, double highestAQI) {
-        setState(() {
-          _aqiData = aqiData;
-          _forecastText = forecastText;
-          _highestAQI = highestAQI;
-        });
-      },
-    );
+    // Remove this call, as we'll only load AQI data after we have the station info
+    // _loadAQIData();
   }
 
   Future<void> _fetchSources() async {
@@ -132,21 +146,212 @@ class _HomePageState extends State<HomePage> {
             _lastUpdated =
                 data["nearest_station"]["timestamp"] ?? "Unknown Time";
           });
+
+          // Now that we have the station info, load AQI data
+          // Explicitly check if station_id exists before proceeding
+          if (_nearestStation != null &&
+              _nearestStation!.containsKey('station_id') &&
+              _nearestStation!['station_id'] != null) {
+            // Get the station ID
+            final stationId = _nearestStation!['station_id'].toString();
+
+            if (stationId.isNotEmpty) {
+              // Call the AQI prediction with valid station ID
+              getAQIPredictionData(
+                location: 'current',
+                stationId: stationId,
+                config: widget.config,
+                onDataGenerated: (aqiData, forecastText, highestAQI) {
+                  setState(() {
+                    _aqiData = aqiData;
+                    _forecastText = forecastText;
+                    _highestAQI = highestAQI;
+                    _isLoading = false;
+
+                    // Create predictions list from the same data
+                    _predictions = [];
+                    for (int i = 0; i < aqiData.length; i++) {
+                      final DateTime timestamp =
+                          DateTime.now().add(Duration(hours: i));
+                      _predictions.add({
+                        'timestamp': timestamp.toIso8601String(),
+                        'aqi': aqiData[i].y.toInt(),
+                      });
+                    }
+                    _isLoadingPredictions = false;
+                  });
+                },
+                onError: (errorMessage) {
+                  setState(() {
+                    _error = errorMessage;
+                    _isLoading = false;
+                    _isLoadingPredictions = false;
+                  });
+                  _showError('Error loading AQI data: $errorMessage');
+                },
+              );
+            } else {
+              setState(() {
+                _isLoading = false;
+                _isLoadingPredictions = false;
+              });
+              _showError('Invalid station ID received');
+            }
+          } else {
+            // If no station_id is available, use location-based instead
+            getAQIPredictionData(
+              location: 'current',
+              config: widget.config,
+              onDataGenerated: (aqiData, forecastText, highestAQI) {
+                setState(() {
+                  _aqiData = aqiData;
+                  _forecastText = forecastText;
+                  _highestAQI = highestAQI;
+                  _isLoading = false;
+
+                  // Create predictions list from the same data
+                  _predictions = [];
+                  for (int i = 0; i < aqiData.length; i++) {
+                    final DateTime timestamp =
+                        DateTime.now().add(Duration(hours: i));
+                    _predictions.add({
+                      'timestamp': timestamp.toIso8601String(),
+                      'aqi': aqiData[i].y.toInt(),
+                    });
+                  }
+                  _isLoadingPredictions = false;
+                });
+              },
+              onError: (errorMessage) {
+                setState(() {
+                  _error = errorMessage;
+                  _isLoading = false;
+                  _isLoadingPredictions = false;
+                });
+                _showError('Error loading AQI data: $errorMessage');
+              },
+            );
+          }
         } else {
+          setState(() {
+            _isLoading = false;
+            _isLoadingPredictions = false;
+          });
           _showError("Error fetching nearest station: ${data["error"]}");
         }
       } else {
+        setState(() {
+          _isLoading = false;
+          _isLoadingPredictions = false;
+        });
         _showError("Error fetching nearest station: ${response.statusCode}");
       }
     } catch (e) {
+      setState(() {
+        _isLoading = false;
+        _isLoadingPredictions = false;
+      });
       _showError("Error fetching nearest station: $e");
     }
   }
 
-  void _toggleTheme(bool value) {
+  // Keep _loadAQIData for use with the refresh function, but modify it to handle both cases
+  void _loadAQIData() {
     setState(() {
-      _isDarkMode = value;
+      _isLoading = true;
+      _isLoadingPredictions = true;
     });
+
+    // Check if we have a station with a valid station_id
+    if (_nearestStation != null &&
+        _nearestStation!.containsKey('station_id') &&
+        _nearestStation!['station_id'] != null) {
+      final stationId = _nearestStation!['station_id'].toString();
+
+      if (stationId.isNotEmpty) {
+        getAQIPredictionData(
+          location: 'current',
+          stationId: stationId,
+          config: widget.config,
+          onDataGenerated: (aqiData, forecastText, highestAQI) {
+            // ...existing code...
+            setState(() {
+              _aqiData = aqiData;
+              _forecastText = forecastText;
+              _highestAQI = highestAQI;
+              _isLoading = false;
+
+              // Create predictions list from the same data
+              _predictions = [];
+              for (int i = 0; i < aqiData.length; i++) {
+                final DateTime timestamp =
+                    DateTime.now().add(Duration(hours: i));
+                _predictions.add({
+                  'timestamp': timestamp.toIso8601String(),
+                  'aqi': aqiData[i].y.toInt(),
+                });
+              }
+              _isLoadingPredictions = false;
+            });
+          },
+          onError: (errorMessage) {
+            // ...existing code...
+            setState(() {
+              _error = errorMessage;
+              _isLoading = false;
+              _isLoadingPredictions = false;
+            });
+            _showError('Error loading AQI data: $errorMessage');
+          },
+        );
+      } else {
+        // Fall back to location-based approach
+        _loadLocationBasedAQI();
+      }
+    } else {
+      // Fall back to location-based approach
+      _loadLocationBasedAQI();
+    }
+  }
+
+  // Helper method to avoid code duplication
+  void _loadLocationBasedAQI() {
+    getAQIPredictionData(
+      location: 'current',
+      config: widget.config,
+      onDataGenerated: (aqiData, forecastText, highestAQI) {
+        setState(() {
+          _aqiData = aqiData;
+          _forecastText = forecastText;
+          _highestAQI = highestAQI;
+          _isLoading = false;
+
+          // Create predictions list from the same data
+          _predictions = [];
+          for (int i = 0; i < aqiData.length; i++) {
+            final DateTime timestamp = DateTime.now().add(Duration(hours: i));
+            _predictions.add({
+              'timestamp': timestamp.toIso8601String(),
+              'aqi': aqiData[i].y.toInt(),
+            });
+          }
+          _isLoadingPredictions = false;
+        });
+      },
+      onError: (errorMessage) {
+        setState(() {
+          _error = errorMessage;
+          _isLoading = false;
+          _isLoadingPredictions = false;
+        });
+        _showError('Error loading AQI data: $errorMessage');
+      },
+    );
+  }
+
+  void _toggleTheme(bool value) {
+    // Update the theme using the provider instead
+    Provider.of<ThemeProvider>(context, listen: false).toggleTheme(value);
   }
 
   void _toggleHistoryMode() {
@@ -239,32 +444,27 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    // Get the current theme from provider
+    final themeProvider = Provider.of<ThemeProvider>(context);
+    final bool isDarkMode = themeProvider.isDarkMode;
+
     return Scaffold(
-      backgroundColor: _isDarkMode ? const Color(0xFF2C2C47) : Colors.white,
+      backgroundColor: isDarkMode ? const Color(0xFF2C2C47) : Colors.white,
       appBar: buildCustomAppBar(
-        isDarkMode: _isDarkMode,
+        isDarkMode: isDarkMode,
         onThemeToggle: _toggleTheme,
       ),
-      drawer: buildDrawer(context: context, isDarkMode: _isDarkMode),
+      drawer: buildDrawer(context: context, isDarkMode: isDarkMode),
       body: RefreshIndicator(
           onRefresh: () async {
-            generateRandomAQIData(
-              onDataGenerated: (List<FlSpot> aqiData, String forecastText,
-                  double highestAQI) {
-                setState(() {
-                  _aqiData = aqiData;
-                  _forecastText = forecastText;
-                  _highestAQI = highestAQI;
-                });
-              },
-            );
+            _loadAQIData();
           },
           child: ListView(
             padding: const EdgeInsets.all(16.0),
             children: [
               // แสดง AQI Card (สถานีที่ใกล้ที่สุด)
               buildAQICard(
-                isDarkMode: _isDarkMode,
+                isDarkMode: isDarkMode, // Use the theme from provider
                 nearestStation: _nearestStation,
                 lastUpdated: _lastUpdated,
               ),
@@ -313,7 +513,7 @@ class _HomePageState extends State<HomePage> {
               // กราฟพยากรณ์/ประวัติ AQI
               buildAQIGraph(
                 context: context,
-                isDarkMode: _isDarkMode,
+                isDarkMode: isDarkMode, // Use the theme from provider
                 isHistoryMode: _isHistoryMode,
                 aqiData: _aqiData,
                 historyData: _historyData,
@@ -331,7 +531,7 @@ class _HomePageState extends State<HomePage> {
                         _currentPosition!.latitude, _currentPosition!.longitude)
                     : null,
                 nearestStation: _nearestStation,
-                isDarkMode: _isDarkMode,
+                isDarkMode: isDarkMode, // Use the theme from provider
               ),
               const SizedBox(height: 16),
               // Key Pollutant Widget (ใช้ helper getNumericValue เพื่อแปลงค่า)
@@ -348,15 +548,105 @@ class _HomePageState extends State<HomePage> {
                     getAdditionalNumericValue(_nearestStation?["pressure"]),
                 temperature:
                     getAdditionalNumericValue(_nearestStation?["temperature"]),
-                isDarkMode: _isDarkMode,
+                isDarkMode: isDarkMode, // Use the theme from provider
               ),
 
               const SizedBox(height: 16),
               // AQI Labels (Legend)
-              buildAQILabels(isDarkMode: _isDarkMode),
+              buildAQILabels(
+                  isDarkMode: isDarkMode), // Use the theme from provider
+
+              const SizedBox(height: 16),
             ],
           )),
     );
+  }
+
+  // Replace the random prediction data with actual API data
+  Widget _buildPredictionCard() {
+    // Get the current theme from provider
+    final themeProvider = Provider.of<ThemeProvider>(context);
+    final bool isDarkMode = themeProvider.isDarkMode;
+
+    return Card(
+      // ... existing card properties ...
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'AQI Prediction',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: isDarkMode ? Colors.white : Colors.black,
+              ),
+            ),
+            const SizedBox(height: 16),
+            if (_isLoadingPredictions)
+              const Center(child: CircularProgressIndicator())
+            else if (_predictionError != null)
+              Text(
+                'Error: $_predictionError',
+                style: TextStyle(color: Colors.red),
+              )
+            else if (_predictions.isEmpty)
+              Text(
+                'No prediction data available',
+                style: TextStyle(
+                  color: isDarkMode ? Colors.white70 : Colors.grey[600],
+                ),
+              )
+            else
+              Column(
+                children: [
+                  for (var prediction in _predictions)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            _formatPredictionTime(prediction['timestamp']),
+                            style: TextStyle(
+                              color: isDarkMode
+                                  ? Colors.white70
+                                  : Colors.grey[800],
+                            ),
+                          ),
+                          Text(
+                            'AQI: ${prediction['aqi']}',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: _getAqiColor(prediction['aqi']),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Helper method to format prediction timestamp
+  String _formatPredictionTime(String timestamp) {
+    final dateTime = DateTime.parse(timestamp);
+    return '${dateTime.hour}:00 ${dateTime.day}/${dateTime.month}';
+  }
+
+  // Helper method to get color based on AQI value
+  Color _getAqiColor(int aqi) {
+    if (aqi <= 50) return Colors.green;
+    if (aqi <= 100) return Colors.yellow;
+    if (aqi <= 150) return Colors.orange;
+    if (aqi <= 200) return Colors.red;
+    if (aqi <= 300) return Colors.purple;
+    return Colors.brown;
   }
 
   double getPollutantNumericValue(dynamic val) {

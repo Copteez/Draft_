@@ -47,3 +47,4 @@ app.*.map.json
 /android/app/release
 android/app/src/main/AndroidManifest.xml
 android/app/src/main/AndroidManifest.xml
+android/app/src/main/AndroidManifest.xml

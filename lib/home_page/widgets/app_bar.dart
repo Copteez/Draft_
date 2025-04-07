@@ -1,5 +1,7 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart'; // Add this import
+import '../../theme_provider.dart'; // Add this import
 
 /// ฟังก์ชันสำหรับสร้าง AppBar ที่ใช้ในหน้า Home
 PreferredSizeWidget buildCustomAppBar({
@@ -31,10 +33,9 @@ PreferredSizeWidget buildCustomAppBar({
             color: isDarkMode ? Colors.white : Colors.black,
             size: 24,
           ),
-          Transform.scale(
-            scale: 0.8,
-            child: Switch(
-              value: isDarkMode,
+          Consumer<ThemeProvider>(
+            builder: (context, themeProvider, child) => Switch(
+              value: themeProvider.isDarkMode,
               onChanged: onThemeToggle,
               activeColor: Colors.orange,
               inactiveThumbColor: Colors.grey,

@@ -101,7 +101,11 @@ class _FavoriteLocationPageState extends State<FavoriteLocationPage> {
     return Scaffold(
       drawer: buildDrawer(context: context, isDarkMode: isDarkMode),
       appBar: AppBar(
-        title: Text("Favorite Locations", style: TextStyle(color: textColor)),
+        title: Text("Favorite Locations",
+            style: TextStyle(
+              color: textColor,
+              fontWeight: FontWeight.bold,
+            )),
         backgroundColor: backgroundColor,
         iconTheme: IconThemeData(color: textColor),
         actions: [
@@ -120,152 +124,166 @@ class _FavoriteLocationPageState extends State<FavoriteLocationPage> {
       body: RefreshIndicator(
         onRefresh: _loadFavoriteLocations,
         child: favoriteLocations.isEmpty
-            ? ListView(
-                children: [
-                  SizedBox(
-                    height: MediaQuery.of(context).size.height * 0.8,
-                    child: Center(
-                        child: Text("No favorite locations added.",
-                            style: TextStyle(color: textColor))),
+            ? Center(
+                child: Text(
+                  "No favorite locations added.",
+                  style: TextStyle(
+                    fontSize: 18,
+                    color: textColor,
                   ),
-                ],
+                ),
               )
             : ListView.builder(
                 itemCount: favoriteLocations.length,
                 itemBuilder: (context, index) {
                   final fav = favoriteLocations[index];
-                  return Card(
-                    color: cardColor,
-                    margin:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                    elevation: 4,
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // Basic location details
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  fav.locationName,
-                                  style: TextStyle(
+                  return GestureDetector(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => MapPage(
+                            config: widget.config,
+                            initialLat: fav.lat,
+                            initialLon: fav.lon,
+                            locationName: fav.locationName,
+                          ),
+                        ),
+                      );
+                    },
+                    child: Card(
+                      color: cardColor,
+                      margin: const EdgeInsets.all(8.0),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16)),
+                      elevation: 4,
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    fav.locationName,
+                                    style: TextStyle(
                                       fontSize: 16,
                                       fontWeight: FontWeight.bold,
-                                      color: textColor),
-                                ),
-                              ),
-                              IconButton(
-                                icon: Icon(Icons.delete, color: Colors.red),
-                                onPressed: () {
-                                  showDialog(
-                                    context: context,
-                                    builder: (ctx) => AlertDialog(
-                                      title: const Text("Confirm Delete"),
-                                      content: const Text(
-                                          "Are you sure you want to delete this favorite location?"),
-                                      actions: [
-                                        TextButton(
-                                          onPressed: () => Navigator.pop(ctx),
-                                          child: const Text("Cancel"),
-                                        ),
-                                        TextButton(
-                                          onPressed: () {
-                                            Navigator.pop(ctx);
-                                            _deleteFavoriteLocation(fav.id);
-                                          },
-                                          child: const Text("Delete"),
-                                        ),
-                                      ],
+                                      color: textColor,
                                     ),
-                                  );
-                                },
-                              ),
-                            ],
-                          ),
-                          Text("Added: ${fav.timestamp}",
-                              style:
-                                  TextStyle(color: textColor.withOpacity(0.8))),
-                          const SizedBox(height: 8),
-                          // FutureBuilder to show AQI card for this location
-                          FutureBuilder<Map<String, dynamic>?>(
-                            future: _fetchAQIForLocation(fav),
-                            builder: (context, snapshot) {
-                              if (snapshot.connectionState ==
-                                  ConnectionState.waiting) {
-                                return const Padding(
-                                  padding: EdgeInsets.symmetric(vertical: 8.0),
-                                  child: Text("Loading AQI...",
-                                      style: TextStyle(
-                                          fontStyle: FontStyle.italic)),
-                                );
-                              }
-                              if (snapshot.hasError || !snapshot.hasData) {
-                                return const Padding(
-                                  padding: EdgeInsets.symmetric(vertical: 8.0),
-                                  child: Text("AQI not available",
-                                      style: TextStyle(
-                                          fontStyle: FontStyle.italic)),
-                                );
-                              }
-                              final aqiData = snapshot.data!;
-                              return Card(
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.delete,
+                                      color: Colors.red),
+                                  onPressed: () {
+                                    showDialog(
+                                      context: context,
+                                      builder: (ctx) => AlertDialog(
+                                        title: const Text("Confirm Delete"),
+                                        content: const Text(
+                                            "Are you sure you want to delete this favorite location?"),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () => Navigator.pop(ctx),
+                                            child: const Text("Cancel"),
+                                          ),
+                                          TextButton(
+                                            onPressed: () {
+                                              Navigator.pop(ctx);
+                                              _deleteFavoriteLocation(fav.id);
+                                            },
+                                            child: const Text("Delete"),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              "Air Quality Index",
+                              style: TextStyle(
+                                fontSize: 13,
                                 color: isDarkMode
-                                    ? const Color(0xFF444C63)
-                                    : Colors.grey[100],
-                                child: Padding(
-                                  padding: const EdgeInsets.all(12.0),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text("AQI for ${fav.locationName}",
-                                          style: TextStyle(
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.bold,
-                                              color: textColor)),
-                                      const SizedBox(height: 4),
-                                      Text("AQI: ${aqiData["aqi"]}",
-                                          style: TextStyle(
-                                              fontSize: 14, color: textColor)),
-                                      Text(
-                                          "Station: ${aqiData["station_name"]}",
-                                          style: TextStyle(
-                                              fontSize: 14, color: textColor)),
-                                      Text("Timestamp: ${aqiData["timestamp"]}",
-                                          style: TextStyle(
-                                              fontSize: 12,
-                                              color:
-                                                  textColor.withOpacity(0.8))),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                          // Tap on card to view location on map
-                          TextButton(
-                            onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => MapPage(
-                                    config: widget.config,
-                                    initialLat: fav.lat,
-                                    initialLon: fav.lon,
-                                    locationName: fav.locationName,
-                                  ),
-                                ),
-                              );
-                            },
-                            child: Text("View on Map",
-                                style: TextStyle(color: Colors.orange)),
-                          ),
-                        ],
+                                    ? Colors.grey[300]
+                                    : Colors.grey[600],
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            FutureBuilder<Map<String, dynamic>?>(
+                              future: _fetchAQIForLocation(fav),
+                              builder: (context, snapshot) {
+                                if (snapshot.connectionState ==
+                                    ConnectionState.waiting) {
+                                  return const Center(
+                                      child: CircularProgressIndicator());
+                                }
+                                if (snapshot.hasError || !snapshot.hasData) {
+                                  return Text("AQI not available",
+                                      style: TextStyle(color: textColor));
+                                }
+                                final aqiData = snapshot.data!;
+                                final aqi = aqiData["aqi"] as int;
+                                return Column(
+                                  children: [
+                                    Text(
+                                      "$aqi",
+                                      style: TextStyle(
+                                        fontSize: 28,
+                                        fontWeight: FontWeight.bold,
+                                        color: _getAQIColor(aqi),
+                                      ),
+                                    ),
+                                    Text(
+                                      _getAQILabel(aqi),
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        color: _getAQIColor(aqi),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 20),
+                                    Container(
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        color: isDarkMode
+                                            ? const Color(0xFF444C63)
+                                            : Colors.grey[100],
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Column(
+                                        children: [
+                                          Text(
+                                            "Station: ${aqiData["station_name"]}",
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color: textColor,
+                                            ),
+                                          ),
+                                          Text(
+                                            _getAQIRecommendation(aqi),
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color: textColor,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   );
@@ -284,12 +302,45 @@ class _FavoriteLocationPageState extends State<FavoriteLocationPage> {
             ),
           );
           if (result != null) {
-            // Reload favorites from server after adding
             await _loadFavoriteLocations();
           }
         },
       ),
     );
+  }
+
+  Color _getAQIColor(int aqi) {
+    if (aqi <= 50) return Colors.green;
+    if (aqi <= 100) return Colors.yellow;
+    if (aqi <= 150) return Colors.orange;
+    if (aqi <= 200) return Colors.red;
+    if (aqi <= 300) return Colors.purple;
+    return Colors.brown;
+  }
+
+  String _getAQILabel(int aqi) {
+    if (aqi <= 50) return "Good";
+    if (aqi <= 100) return "Moderate";
+    if (aqi <= 150) return "Unhealthy for Sensitive Groups";
+    if (aqi <= 200) return "Unhealthy";
+    if (aqi <= 300) return "Very Unhealthy";
+    return "Hazardous";
+  }
+
+  String _getAQIRecommendation(int aqi) {
+    if (aqi <= 50) {
+      return "Air quality is good. Perfect for outdoor activities!";
+    } else if (aqi <= 100) {
+      return "Air quality is acceptable. Sensitive individuals should limit prolonged outdoor exposure.";
+    } else if (aqi <= 150) {
+      return "Members of sensitive groups may experience health effects.";
+    } else if (aqi <= 200) {
+      return "Everyone may begin to experience health effects.";
+    } else if (aqi <= 300) {
+      return "Health alert: everyone may experience more serious health effects.";
+    } else {
+      return "Health warnings of emergency conditions. Entire population is likely to be affected.";
+    }
   }
 }
 

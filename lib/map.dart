@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -11,137 +11,30 @@ import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import 'package:MySecureMap/config.dart';
 import 'package:MySecureMap/home_page/widgets/drawer_widget.dart';
-import 'package:MySecureMap/map/map_source_dropdown.dart';
-import 'package:MySecureMap/map/map_theme.dart';
-import 'package:MySecureMap/map/map_search_section.dart';
 import 'package:MySecureMap/details_page.dart';
-
-/// Decodes a polyline into a list of coordinate pairs.
-List<List<double>> decodePoly(String poly) {
-  var list = poly.codeUnits;
-  List<List<double>> points = [];
-  int index = 0;
-  int len = poly.length;
-  int lat = 0;
-  int lng = 0;
-  while (index < len) {
-    int shift = 0;
-    int result = 0;
-    while (true) {
-      int byte = list[index] - 63;
-      index++;
-      result |= (byte & 0x1f) << shift;
-      shift += 5;
-      if (byte < 0x20) break;
-    }
-    int dLat = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
-    lat += dLat;
-    shift = 0;
-    result = 0;
-    while (true) {
-      int byte = list[index] - 63;
-      index++;
-      result |= (byte & 0x1f) << shift;
-      shift += 5;
-      if (byte < 0x20) break;
-    }
-    int dLng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
-    lng += dLng;
-    points.add([lat / 1e5, lng / 1e5]);
-  }
-  return points;
-}
-
-/// Asynchronously decodes a polyline into a list of LatLng.
-Future<List<LatLng>> decodePolyAsync(String poly) async {
-  final List<List<double>> list = await compute(decodePoly, poly);
-  return list.map((e) => LatLng(e[0], e[1])).toList();
-}
-
-/// Smooths a polyline using Catmull-Rom spline interpolation.
-List<LatLng> smoothPolyline(List<LatLng> points,
-    {int numPointsPerSegment = 10}) {
-  if (points.length < 4) return points;
-  List<LatLng> smoothedPoints = [];
-  for (int i = 0; i < points.length - 1; i++) {
-    LatLng p0 = i == 0 ? points[i] : points[i - 1];
-    LatLng p1 = points[i];
-    LatLng p2 = points[i + 1];
-    LatLng p3 = (i + 2 < points.length) ? points[i + 2] : points[i + 1];
-    for (int j = 0; j < numPointsPerSegment; j++) {
-      double t = j / numPointsPerSegment;
-      double t2 = t * t;
-      double t3 = t2 * t;
-      double lat = 0.5 *
-          (2 * p1.latitude +
-              (-p0.latitude + p2.latitude) * t +
-              (2 * p0.latitude -
-                      5 * p1.latitude +
-                      4 * p2.latitude -
-                      p3.latitude) *
-                  t2 +
-              (-p0.latitude + 3 * p1.latitude - 3 * p2.latitude + p3.latitude) *
-                  t3);
-      double lng = 0.5 *
-          (2 * p1.longitude +
-              (-p0.longitude + p2.longitude) * t +
-              (2 * p0.longitude -
-                      5 * p1.longitude +
-                      4 * p2.longitude -
-                      p3.longitude) *
-                  t2 +
-              (-p0.longitude +
-                      3 * p1.longitude -
-                      3 * p2.longitude +
-                      p3.longitude) *
-                  t3);
-      smoothedPoints.add(LatLng(lat, lng));
-    }
-  }
-  smoothedPoints.add(points.last);
-  return smoothedPoints;
-}
-
-/// Computes cumulative distance along a polyline from its start to a given point (in km).
-double computeCumulativeDistance(LatLng point, List<LatLng> polyline) {
-  double total = 0.0;
-  for (int i = 1; i < polyline.length; i++) {
-    total += haversine(
-      polyline[i - 1].latitude,
-      polyline[i - 1].longitude,
-      polyline[i].latitude,
-      polyline[i].longitude,
-    );
-    if ((polyline[i].latitude - point.latitude).abs() < 0.0001 &&
-        (polyline[i].longitude - point.longitude).abs() < 0.0001) {
-      break;
-    }
-  }
-  return total;
-}
-
-/// Haversine formula: returns distance in km between two coordinates.
-double haversine(double lat1, double lon1, double lat2, double lon2) {
-  const R = 6371;
-  final phi1 = math.pi * lat1 / 180;
-  final phi2 = math.pi * lat2 / 180;
-  final deltaPhi = math.pi * (lat2 - lat1) / 180;
-  final deltaLambda = math.pi * (lon2 - lon1) / 180;
-
-  final a = math.sin(deltaPhi / 2) * math.sin(deltaPhi / 2) +
-      math.cos(phi1) *
-          math.cos(phi2) *
-          math.sin(deltaLambda / 2) *
-          math.sin(deltaLambda / 2);
-  final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
-  return R * c;
-}
+import 'package:MySecureMap/map/map_search_section.dart' as search;
+import 'package:MySecureMap/map/map_floating_option.dart';
+import 'map/map_polyline_utils.dart';
+import 'map/map_route_models.dart';
+import 'map/map_marker_utils.dart';
+import 'map/map_route_utils.dart';
+import 'map/map_theme.dart';
+import 'map/map_location_service.dart';
+import 'map/map_ui_components.dart';
+import 'map/map_route_service.dart';
+import 'map/map_route_progress.dart';
+import 'map/map_route_bottom_sheet.dart';
+import 'map/map_android_notification.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:provider/provider.dart';
+import 'theme_provider.dart';
 
 class MapPage extends StatefulWidget {
   final AppConfig config;
   final double? initialLat;
   final double? initialLon;
   final String? locationName;
+
   const MapPage({
     Key? key,
     required this.config,
@@ -164,64 +57,112 @@ class _MapPageState extends State<MapPage> {
   List<Map<String, dynamic>> _allStations = [];
   Set<Marker> _markers = {};
   Map<PolylineId, Polyline> polylines = {};
-  bool _isDarkMode = true;
   String _selectedParameter = "AQI";
   final List<String> _parameters = ["AQI", "PM2.5", "PM10", "O3", "SO2"];
   bool _hasHandledRouteArguments = false;
   bool _isRouteLoading = false;
   bool _markersLoaded = false;
 
-  // For custom info window
   Map<String, dynamic>? _selectedStationDetail;
   LatLng? _selectedMarkerLatLng;
   Offset? _infoWindowOffset;
 
-  // For route selection:
   Map<int, List<LatLng>> _routePolylines = {};
   int _selectedRouteIndex = 0;
 
-  // User ID (dummy for now)
   String? _userId;
   final String baseUrl =
-      "https://3e24-2001-fb1-178-76e-402b-db55-4cab-efc.ngrok-free.app";
+      "https://41b9-2001-fb1-17b-c4a7-b936-64c4-c08e-8d05.ngrok-free.app";
 
-  // Add new state variables
   Map<int, double> _routeSafetyScores = {};
   int? _safestRouteIndex;
 
-  // Add new state variable to store all route polylines
   final Map<String, Polyline> _allPolylines = {};
 
-  // Add new state variable for route loading
   bool _isRoutePlotting = false;
 
-  // Add cache for route colors
   Map<String, Color> _segmentColors = {};
 
-  // Add new constants for segmentation
-  static const double SEGMENT_LENGTH = 0.2; // 200 meters per segment
-  static const double MERGE_THRESHOLD =
-      10; // AQI difference threshold for merging
+  static const double SEGMENT_LENGTH = 0.2;
+  static const double MERGE_THRESHOLD = 10;
 
-  // Add marker cache
   static final Map<int, BitmapDescriptor> _markerIconCache = {};
   Timer? _markersUpdateTimer;
+
+  List<RouteOption> _routeOptions = [];
+
+  int _userSelectedRouteIndex = 0;
+
+  Set<String> _activeStationIds = {};
+
+  StreamSubscription<Position>? _positionStreamSubscription;
+  BitmapDescriptor? _userLocationIcon;
+
+  bool _isLoadingMarkers = false;
+
+  String? _nearestStationName;
+  Timer? _stationCheckTimer;
+
+  bool _showRouteProgress = false;
+
+  // Add notification flag
+  bool _showNotification = false;
+
+  // Add this field for AQI predictions
+  List<Map<String, dynamic>> _predictions = [];
 
   @override
   void initState() {
     super.initState();
-    // Add user ID loading
+    _initializeUserLocationIcon();
     _loadUserId();
+
+    // Only initialize Android notifications safely
+    try {
+      if (Platform.isAndroid) {
+        // Safely request permissions first
+        _requestNotificationPermission();
+
+        // Then initialize the notification service
+        AndroidNotificationService.initialize();
+      }
+    } catch (e) {
+      print("Error initializing notifications: $e");
+    }
+
     Future.wait([
       _initializeUserAndLocation(),
       _fetchSources(),
     ]).then((_) {
       _fetchAllAQIStations();
       if (_mapController != null && _currentLocation != null) {
-        _mapController!
-            .animateCamera(CameraUpdate.newLatLngZoom(_currentLocation!, 14));
+        _mapController!.animateCamera(
+          CameraUpdate.newLatLngZoom(_currentLocation!, 14),
+        );
       }
     });
+
+    _stationCheckTimer = Timer.periodic(
+      const Duration(minutes: 1),
+      (_) => _updateNearestStation(),
+    );
+  }
+
+  @override
+  void dispose() {
+    // Clean up only if on Android
+    if (Platform.isAndroid) {
+      AndroidNotificationService.hideRouteProgressNotification();
+    }
+    _stationCheckTimer?.cancel();
+    _positionStreamSubscription?.cancel();
+    _mapController?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _initializeUserLocationIcon() async {
+    _userLocationIcon = await createUserLocationIcon();
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadUserId() async {
@@ -237,31 +178,25 @@ class _MapPageState extends State<MapPage> {
         _currentLocation = LatLng(widget.initialLat!, widget.initialLon!);
       });
     } else {
-      await _getCurrentLocation();
+      try {
+        final position = await getCurrentPosition();
+        if (mounted) {
+          setState(() {
+            _currentLocation = LatLng(position.latitude, position.longitude);
+          });
+        }
+      } catch (e) {
+        print("Error getting current location: $e");
+      }
     }
-    // TODO: Load user id if needed.
   }
 
-  void _handleRouteArguments() {
-    final args =
-        ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
-    if (args != null &&
-        args.containsKey("origin") &&
-        args.containsKey("destination")) {
-      final originMap = args["origin"] as Map<String, dynamic>;
-      final destinationMap = args["destination"] as Map<String, dynamic>;
-      final origin = LatLng(originMap["lat"], originMap["lon"]);
-      final destination = LatLng(destinationMap["lat"], destinationMap["lon"]);
-      if (_mapController == null) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_mapController != null) {
-            _loadRoute(origin, destination, "driving");
-            _updateCameraPositionForRoute(origin, destination);
-          }
-        });
-      } else {
-        _loadRoute(origin, destination, "driving");
-        _updateCameraPositionForRoute(origin, destination);
+  Future<void> _requestNotificationPermission() async {
+    if (Platform.isAndroid) {
+      // For Android 13+ (API level 33+), explicitly request notification permission
+      if (await Permission.notification.isDenied) {
+        await Permission.notification.request();
+        print("Requested notification permission");
       }
     }
   }
@@ -269,327 +204,74 @@ class _MapPageState extends State<MapPage> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _handleRouteArguments();
+    // Wait for stations to be loaded first
+    _handleRouteArgumentsAfterStationsLoad();
   }
 
-  Future<LatLng?> _getLatLngFromAddress(String address) async {
-    if (address.trim().toLowerCase() == "your location") {
-      return _currentLocation;
-    }
-    try {
-      List<Location> locations = await locationFromAddress(address);
-      if (locations.isNotEmpty) {
-        return LatLng(locations[0].latitude, locations[0].longitude);
-      }
-    } catch (e) {
-      print("Error in geocoding: $e");
-    }
-    return null;
-  }
-
-  /// Load route from Directions API and store only segmented polyline.
-  Future<void> _loadRoute(
-      LatLng origin, LatLng destination, String travelMode) async {
-    setState(() {
-      _routePolylines.clear();
-      _allPolylines.clear();
-      _selectedRouteIndex = -1; // or null if you prefer
-      _isRoutePlotting = true; // Set loading state
-    });
-    _populateAllMarkers();
-    final String apiKey = widget.config.googleApiKey;
-    final url = Uri.https('maps.googleapis.com', '/maps/api/directions/json', {
-      'origin': '${origin.latitude},${origin.longitude}',
-      'destination': '${destination.latitude},${destination.longitude}',
-      'mode': travelMode,
-      'alternatives': 'true',
-      'key': apiKey,
-    });
-    try {
-      final response = await http.get(url);
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final routes = data['routes'];
-        if (routes != null && routes.isNotEmpty) {
-          int routeCount = routes.length >= 3 ? 3 : routes.length;
-          _routeSafetyScores.clear();
-
-          for (int r = 0; r < routeCount; r++) {
-            final overview = routes[r]['overview_polyline']['points'];
-            List<LatLng> rawPoints = await decodePolyAsync(overview);
-            List<LatLng> points =
-                smoothPolyline(rawPoints, numPointsPerSegment: 10);
-            _routePolylines[r] = points;
-
-            // Calculate safety score for this route
-            _routeSafetyScores[r] = _calculateRouteSafetyScore(points);
-          }
-
-          // Find safest route
-          _safestRouteIndex = _routeSafetyScores.entries
-              .reduce((a, b) => a.value < b.value ? a : b)
-              .key;
-
-          // Create all route polylines at once
-          for (int r = 0; r < routeCount; r++) {
-            await _createRoutePolylines(_routePolylines[r]!,
-                routeIndex: r, opacity: r == _safestRouteIndex ? 1.0 : 0.3);
-          }
-
-          setState(() {
-            _selectedRouteIndex = _safestRouteIndex!;
-            polylines = Map.from(_allPolylines);
-            _isRoutePlotting = false;
-          });
-        } else {
-          print("No routes found");
-        }
+  void _handleRouteArgumentsAfterStationsLoad() {
+    final args =
+        ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+    if (args != null &&
+        args.containsKey("origin") &&
+        args.containsKey("destination")) {
+      // If we need to load a route, make sure stations are loaded first
+      if (_allStations.isEmpty) {
+        // If stations aren't loaded yet, fetch them first, then handle route
+        _fetchAllAQIStations().then((_) {
+          _processRouteArguments(args);
+        });
       } else {
-        print("Error fetching directions: ${response.statusCode}");
+        // Stations already loaded, handle the route directly
+        _processRouteArguments(args);
       }
-    } catch (e) {
-      print("Error fetching polyline: $e");
-    } finally {
-      setState(() {
-        _isRouteLoading = false;
-        _isRoutePlotting = false;
+    }
+  }
+
+  void _processRouteArguments(Map<String, dynamic> args) {
+    final originMap = args["origin"] as Map<String, dynamic>;
+    final destinationMap = args["destination"] as Map<String, dynamic>;
+    final origin = LatLng(originMap["lat"], originMap["lon"]);
+    final destination = LatLng(destinationMap["lat"], destinationMap["lon"]);
+
+    if (_mapController == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_mapController != null) {
+          _loadRoute(origin, destination, "driving");
+          _updateCameraPositionForRoute(origin, destination);
+        }
       });
-      await _fetchAllAQIStations();
+    } else {
+      _loadRoute(origin, destination, "driving");
+      _updateCameraPositionForRoute(origin, destination);
     }
   }
 
-  /// New method to create route polylines
-  Future<void> _createRoutePolylines(List<LatLng> points,
-      {required int routeIndex, required double opacity}) async {
-    final segments = await compute(_createSegmentsInIsolate, {
-      'points': points,
-      'stations': _allStations,
-      'segmentLength': SEGMENT_LENGTH,
-    });
+  void _onMapCreated(GoogleMapController controller) {
+    _mapController = controller;
+    _mapController!.setMapStyle(
+        Provider.of<ThemeProvider>(context, listen: false).isDarkMode
+            ? darkMapStyle
+            : lightMapStyle);
 
-    for (int i = 0; i < segments.length; i++) {
-      RouteSegment segment = segments[i];
-      String polylineId = "seg_${routeIndex}_$i";
+    if (_currentLocation != null) {
+      _mapController!
+          .animateCamera(CameraUpdate.newLatLngZoom(_currentLocation!, 14));
+    }
 
-      // Get color based on nearest station AQI
-      Color segColor = segment.nearbyStations.isNotEmpty
-          ? _getAQIColor(segment.nearbyStations.first['aqi'])
-          : Colors.grey;
-
-      _allPolylines[polylineId] = Polyline(
-        polylineId: PolylineId(polylineId),
-        points: segment.points,
-        color: segColor.withOpacity(opacity),
-        width: 5,
-        onTap: () => _showSegmentInfo(segment),
-      );
+    if (!_hasHandledRouteArguments) {
+      // Update this line to call the new method instead of the old one
+      _handleRouteArgumentsAfterStationsLoad();
+      _hasHandledRouteArguments = true;
     }
   }
 
-  /// Improved route segmentation
-  Future<List<RouteSegment>> _createSegments(List<LatLng> points) async {
-    const double SEGMENT_LENGTH = 0.2; // 200m segments
-
-    List<RouteSegment> segments = [];
-    List<LatLng> currentSegment = [points.first];
-    double currentDistance = 0;
-
-    for (int i = 1; i < points.length; i++) {
-      LatLng prev = points[i - 1];
-      LatLng curr = points[i];
-
-      double segmentDistance = haversine(
-          prev.latitude, prev.longitude, curr.latitude, curr.longitude);
-
-      currentDistance += segmentDistance;
-      currentSegment.add(curr);
-
-      if (currentDistance >= SEGMENT_LENGTH || i == points.length - 1) {
-        // Calculate segment center
-        double centerLat = 0, centerLon = 0;
-        for (var point in currentSegment) {
-          centerLat += point.latitude;
-          centerLon += point.longitude;
-        }
-        centerLat /= currentSegment.length;
-        centerLon /= currentSegment.length;
-
-        // Find nearest station regardless of distance
-        WeightedStation? nearestStation;
-        double minDistance = double.infinity;
-
-        for (var station in _allStations) {
-          double? lat = double.tryParse(station["lat"]?.toString() ?? "");
-          double? lon = double.tryParse(station["lon"]?.toString() ?? "");
-          int? aqi = int.tryParse(station["aqi"]?.toString() ?? "");
-
-          if (lat == null || lon == null || aqi == null || aqi <= 0) continue;
-
-          double distance = haversine(centerLat, centerLon, lat, lon);
-          if (distance < minDistance) {
-            minDistance = distance;
-            nearestStation = WeightedStation(
-              aqi: aqi,
-              weight: 1 / (distance + 0.1),
-              stationName: station["station_name"] ?? "Unknown",
-              distance: distance,
-            );
-          }
-        }
-
-        double finalAqi = nearestStation?.aqi.toDouble() ?? 0;
-        List<Map<String, dynamic>> stationInfo = nearestStation != null
-            ? [
-                {
-                  'name': nearestStation.stationName,
-                  'aqi': nearestStation.aqi,
-                  'distance': nearestStation.distance,
-                }
-              ]
-            : [];
-
-        segments.add(RouteSegment(
-          points: List.from(currentSegment),
-          aqi: finalAqi,
-          nearbyStations: stationInfo,
-        ));
-
-        // Start new segment
-        currentSegment = [curr];
-        currentDistance = 0;
-      }
-    }
-
-    return segments;
-  }
-
-  /// Calculate average AQI for a route segment based on nearby stations
-  Color _getSegmentColor(
-      LatLng start, LatLng end, List<Map<String, dynamic>> stations) {
-    double totalAQI = 0;
-    int count = 0;
-
-    // Calculate midpoint of segment
-    LatLng midpoint = LatLng((start.latitude + end.latitude) / 2,
-        (start.longitude + end.longitude) / 2);
-
-    // Find stations within 500m of segment midpoint
-    for (var station in stations) {
-      double? lat = double.tryParse(station["lat"]?.toString() ?? "");
-      double? lon = double.tryParse(station["lon"]?.toString() ?? "");
-      int? aqi = int.tryParse(station["aqi"]?.toString() ?? "");
-
-      if (lat != null && lon != null && aqi != null) {
-        double distance =
-            haversine(midpoint.latitude, midpoint.longitude, lat, lon);
-
-        // Only consider stations within 500m
-        if (distance <= 0.5) {
-          // Weight by inverse distance
-          double weight =
-              1 / (distance + 0.1); // Add 0.1 to avoid division by zero
-          totalAQI += aqi * weight;
-          count += 1;
-        }
-      }
-    }
-
-    if (count > 0) {
-      int avgAQI = (totalAQI / count).round();
-      return _getAQIColor(avgAQI);
-    }
-
-    // Default color if no stations nearby
-    return Colors.grey;
-  }
-
-  /// Calculate safety score for a route (lower is safer)
-  double _calculateRouteSafetyScore(List<LatLng> route) {
-    double totalScore = 0;
-    int samplePoints = 0;
-
-    // Sample points along the route
-    for (int i = 0; i < route.length - 1; i++) {
-      LatLng start = route[i];
-      LatLng end = route[i + 1];
-
-      // Find nearby stations
-      List<Map<String, dynamic>> nearbyStations = _allStations.where((station) {
-        double? lat = double.tryParse(station["lat"]?.toString() ?? "");
-        double? lon = double.tryParse(station["lon"]?.toString() ?? "");
-        if (lat == null || lon == null) return false;
-
-        double distance = _distanceToSegment(lat, lon, start.latitude,
-            start.longitude, end.latitude, end.longitude);
-        return distance <= 0.5; // Within 500m
-      }).toList();
-
-      if (nearbyStations.isEmpty) continue;
-
-      // Calculate weighted average AQI for this segment
-      double segmentScore = 0;
-      double totalWeight = 0;
-
-      for (var station in nearbyStations) {
-        int aqi = int.tryParse(station["aqi"]?.toString() ?? "0") ?? 0;
-        double? lat = double.tryParse(station["lat"]?.toString() ?? "");
-        double? lon = double.tryParse(station["lon"]?.toString() ?? "");
-        if (lat == null || lon == null) continue;
-
-        double distance = _distanceToSegment(lat, lon, start.latitude,
-            start.longitude, end.latitude, end.longitude);
-
-        double weight = 1 / (distance + 0.1);
-        segmentScore += aqi * weight;
-        totalWeight += weight;
-      }
-
-      if (totalWeight > 0) {
-        totalScore += segmentScore / totalWeight;
-        samplePoints++;
-      }
-    }
-
-    return samplePoints > 0 ? totalScore / samplePoints : double.infinity;
-  }
-
-  /// Update camera bounds to include both origin and destination.
   void _updateCameraPositionForRoute(LatLng origin, LatLng destination) {
     if (_mapController != null) {
-      LatLngBounds bounds = LatLngBounds(
-        southwest: LatLng(math.min(origin.latitude, destination.latitude),
-            math.min(origin.longitude, destination.longitude)),
-        northeast: LatLng(math.max(origin.latitude, destination.latitude),
-            math.max(origin.longitude, destination.longitude)),
-      );
+      final bounds = getRouteBounds(origin, destination);
       _mapController!.animateCamera(CameraUpdate.newLatLngBounds(bounds, 50));
     } else {
       print("Warning: _mapController is null, cannot update camera position.");
     }
-  }
-
-  Future<void> _getCurrentLocation() async {
-    try {
-      Position position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high);
-      setState(() {
-        _currentLocation = LatLng(position.latitude, position.longitude);
-      });
-      if (_mapController != null && _currentLocation != null) {
-        _mapController!
-            .animateCamera(CameraUpdate.newLatLngZoom(_currentLocation!, 14));
-      }
-    } catch (e) {
-      print("Error getting current location: $e");
-    }
-  }
-
-  Color _colorFromHex(String hexColor) {
-    hexColor = hexColor.replaceAll("#", "");
-    if (hexColor.length == 6) {
-      hexColor = "FF$hexColor";
-    }
-    return Color(int.parse(hexColor, radix: 16));
   }
 
   Future<void> _fetchSources() async {
@@ -621,6 +303,10 @@ class _MapPageState extends State<MapPage> {
   }
 
   Future<void> _fetchAllAQIStations() async {
+    setState(() {
+      _isLoadingMarkers = true;
+    });
+
     String url = "$baseUrl/api/stations-aqi";
     if (_selectedSource != "All") {
       url += "?source=$_selectedSource";
@@ -632,8 +318,14 @@ class _MapPageState extends State<MapPage> {
         if (data["success"] == true) {
           setState(() {
             _allStations = List<Map<String, dynamic>>.from(data["stations"]);
+            if (_selectedParameter != "AQI") {
+              _allStations = _allStations.where((station) {
+                var value = station[_selectedParameter.toLowerCase()];
+                return value != null && value > 0;
+              }).toList();
+            }
           });
-          _populateAllMarkers();
+          await _populateAllMarkers();
         } else {
           print("API error: ${data['error']}");
         }
@@ -642,466 +334,405 @@ class _MapPageState extends State<MapPage> {
       }
     } catch (e) {
       print("Error fetching all AQI stations: $e");
+    } finally {
+      setState(() {
+        _isLoadingMarkers = false;
+      });
     }
   }
 
-  /// Populate markers with proper caching
   Future<void> _populateAllMarkers({List<LatLng>? selectedRoute}) async {
     _markersUpdateTimer?.cancel();
     _markersUpdateTimer = Timer(const Duration(milliseconds: 100), () async {
-      // Pre-generate marker icons for all AQI values
-      for (var station in _allStations) {
-        int aqi = int.tryParse(station["aqi"]?.toString() ?? "0") ?? 0;
-        if (aqi > 0 && !_markerIconCache.containsKey(aqi)) {
-          _markerIconCache[aqi] = await _createCustomMarker(aqi);
-        }
+      Set<Marker> newMarkers = {};
+
+      if (_currentLocation != null) {
+        newMarkers.add(
+          Marker(
+            markerId: const MarkerId('user'),
+            position: _currentLocation!,
+            icon: _userLocationIcon ??
+                BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+          ),
+        );
       }
 
-      final markers = await compute(_createMarkersInIsolate, {
-        'stations': _allStations,
-        'currentLocation': _currentLocation,
-        'selectedParameter': _selectedParameter,
-        'markerCache': _markerIconCache,
-      });
+      List<Map<String, dynamic>> visibleStations = _allStations;
+      if (_activeStationIds.isNotEmpty) {
+        visibleStations = _allStations
+            .where((station) =>
+                _activeStationIds.contains(station["station_name"]))
+            .toList();
+      }
+
+      for (var station in visibleStations) {
+        double? lat = double.tryParse(station["lat"]?.toString() ?? "");
+        double? lon = double.tryParse(station["lon"]?.toString() ?? "");
+        int aqi = int.tryParse(station["aqi"]?.toString() ?? "") ?? 0;
+
+        if (aqi <= 0 || lat == null || lon == null) continue;
+
+        BitmapDescriptor markerIcon;
+        if (!_markerIconCache.containsKey(aqi)) {
+          markerIcon = await createCustomMarker(aqi);
+          _markerIconCache[aqi] = markerIcon;
+        } else {
+          markerIcon = _markerIconCache[aqi]!;
+        }
+
+        newMarkers.add(
+          Marker(
+            markerId: MarkerId(station["station_id"].toString()),
+            position: LatLng(lat, lon),
+            icon: markerIcon,
+            onTap: () {
+              setState(() {
+                _selectedStationDetail = station;
+                _selectedMarkerLatLng = LatLng(lat, lon);
+              });
+            },
+          ),
+        );
+      }
 
       if (mounted) {
         setState(() {
-          _markers = markers;
+          _markers = newMarkers;
           _markersLoaded = true;
         });
       }
     });
   }
 
-  // Add this helper method to calculate the distance from a point to a line segment
-  double _distanceToSegment(
-    double px,
-    double py,
-    double x1,
-    double y1,
-    double x2,
-    double y2,
-  ) {
-    double A = px - x1;
-    double B = py - y1;
-    double C = x2 - x1;
-    double D = y2 - y1;
+  Future<void> _loadRoute(
+      LatLng origin, LatLng destination, String travelMode) async {
+    setState(() {
+      _routePolylines.clear();
+      _allPolylines.clear();
+      _selectedRouteIndex = -1;
+      _isRoutePlotting = true;
+      _routeOptions = [];
+    });
+    _populateAllMarkers();
 
-    double dot = A * C + B * D;
-    double len_sq = C * C + D * D;
-    double param = dot / len_sq;
+    // Save this route to history on server
+    _saveRouteToHistory(origin, destination);
 
-    double xx, yy;
+    final String apiKey = widget.config.googleApiKey;
+    final url = Uri.https('maps.googleapis.com', '/maps/api/directions/json', {
+      'origin': '${origin.latitude},${origin.longitude}',
+      'destination': '${destination.latitude},${destination.longitude}',
+      'mode': travelMode,
+      'alternatives': 'true',
+      'key': apiKey,
+    });
 
-    if (param < 0) {
-      xx = x1;
-      yy = y1;
-    } else if (param > 1) {
-      xx = x2;
-      yy = y2;
-    } else {
-      xx = x1 + param * C;
-      yy = y1 + param * D;
-    }
+    try {
+      final response = await http.get(url);
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final routes = data['routes'];
 
-    return haversine(px, py, xx, yy);
-  }
+        if (routes != null && routes.isNotEmpty) {
+          int routeCount = routes.length >= 3 ? 3 : routes.length;
+          _routeSafetyScores.clear();
 
-  /// Create a custom marker.
-  Future<BitmapDescriptor> _createCustomMarker(int aqi) async {
-    if (_markerIconCache.containsKey(aqi)) {
-      return _markerIconCache[aqi]!;
-    }
+          for (int r = 0; r < routeCount; r++) {
+            final overview = routes[r]['overview_polyline']['points'];
+            List<LatLng> rawPoints = await decodePolyAsync(overview);
+            List<LatLng> points =
+                smoothPolyline(rawPoints, numPointsPerSegment: 10);
+            _routePolylines[r] = points;
 
-    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
-    final Canvas canvas = Canvas(pictureRecorder);
-    final Paint paint = Paint()..color = _getAQIColor(aqi);
-    const double radius = 60.0;
+            _routeSafetyScores[r] =
+                calculateRouteSafetyScore(points, _allStations);
+          }
 
-    canvas.drawCircle(const Offset(radius, radius), radius, paint);
+          _safestRouteIndex = _routeSafetyScores.entries
+              .reduce((a, b) => a.value < b.value ? a : b)
+              .key;
 
-    TextPainter textPainter = TextPainter(
-      text: TextSpan(
-        text: aqi.toString(),
-        style: const TextStyle(
-            fontSize: 48, color: Colors.white, fontWeight: FontWeight.bold),
-      ),
-      textDirection: TextDirection.ltr,
-    );
+          for (int r = 0; r < routeCount; r++) {
+            await _createRoutePolylines(_routePolylines[r]!,
+                routeIndex: r, opacity: r == _safestRouteIndex ? 1.0 : 0.3);
+          }
 
-    textPainter.layout();
-    textPainter.paint(
-        canvas,
-        Offset(
-            radius - textPainter.width / 2, radius - textPainter.height / 2));
+          _routeOptions = [];
+          for (int r = 0; r < routeCount; r++) {
+            await _processRouteSegments(_routePolylines[r]!, r);
+          }
 
-    final img = await pictureRecorder
-        .endRecording()
-        .toImage((radius * 2).toInt(), (radius * 2).toInt());
-    final data = await img.toByteData(format: ui.ImageByteFormat.png);
+          _routeOptions.sort((a, b) => a.avgAqi.compareTo(b.avgAqi));
+          final bestRouteIndex = _routeOptions[0].routeIndex;
 
-    final icon = BitmapDescriptor.fromBytes(data!.buffer.asUint8List());
-    _markerIconCache[aqi] = icon;
-    return icon;
-  }
+          for (int i = 0; i < _routeOptions.length; i++) {
+            _routeOptions[i] = RouteOption(
+              routeIndex: _routeOptions[i].routeIndex,
+              avgAqi: _routeOptions[i].avgAqi,
+              calculations: _routeOptions[i].calculations,
+              isSafest: i == 0,
+              displayIndex: i,
+            );
+          }
 
-  Color _getAQIColor(int aqi) {
-    if (aqi <= 0) return Colors.grey;
-    if (aqi <= 50) return Colors.green;
-    if (aqi <= 100) return const Color.fromARGB(255, 223, 205, 43);
-    if (aqi <= 150) return Colors.orange;
-    if (aqi <= 200) return Colors.red;
-    if (aqi <= 300) return Colors.purple;
-    return Colors.brown;
-  }
+          _activeStationIds.clear();
+          final bestRoute = _routeOptions[0];
+          for (var calc in bestRoute.calculations) {
+            _activeStationIds.add(calc.stationName);
+          }
 
-  Future<void> _updateInfoWindowPosition() async {
-    if (_selectedMarkerLatLng != null && _mapController != null) {
-      final ScreenCoordinate screenCoordinate =
-          await _mapController!.getScreenCoordinate(_selectedMarkerLatLng!);
+          setState(() {
+            _selectedRouteIndex = bestRouteIndex;
+            _userSelectedRouteIndex = bestRouteIndex;
+            polylines = Map.fromEntries(_allPolylines.entries.map((entry) {
+              final routeIndex = int.tryParse(entry.key.split('_')[1]) ?? -1;
+              return MapEntry(
+                  PolylineId(entry.key),
+                  entry.value.copyWith(
+                      colorParam: entry.value.color.withOpacity(
+                          routeIndex == bestRouteIndex ? 1.0 : 0.3)));
+            }));
+            _isRoutePlotting = false;
+          });
+
+          _updateMarkers();
+
+          if (_mapController != null) {
+            final bounds = getRouteBounds(origin, destination);
+            _mapController!
+                .animateCamera(CameraUpdate.newLatLngBounds(bounds, 100));
+          }
+
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              _scaffoldKey.currentState?.openEndDrawer();
+            }
+          });
+
+          // After route is loaded successfully, fetch predictions for destination
+          await _fetchDestinationPredictions(destination);
+        } else {
+          print("No routes found");
+        }
+      } else {
+        print("Error fetching directions: ${response.statusCode}");
+      }
+    } catch (e) {
+      print("Error fetching polyline: $e");
+    } finally {
       setState(() {
-        _infoWindowOffset = Offset(
-            screenCoordinate.x.toDouble(), screenCoordinate.y.toDouble());
+        _isRouteLoading = false;
+        _isRoutePlotting = false;
+      });
+      await _fetchAllAQIStations();
+    }
+  }
+
+  // Update the method to save route history to server
+  Future<void> _saveRouteToHistory(LatLng origin, LatLng destination) async {
+    // Check if user is logged in by verifying userId
+    if (_userId == null) {
+      print("User not logged in. Route history not saved.");
+      return;
+    }
+
+    try {
+      // Get location names for origin and destination
+      String originName = "Unknown location";
+      String destinationName = "Unknown location";
+
+      // Try to get location name for origin
+      if (_currentLocation != null &&
+          origin.latitude == _currentLocation!.latitude &&
+          origin.longitude == _currentLocation!.longitude) {
+        originName = "Your Location";
+      } else {
+        try {
+          List<Placemark> placemarks =
+              await placemarkFromCoordinates(origin.latitude, origin.longitude);
+          if (placemarks.isNotEmpty) {
+            Placemark place = placemarks.first;
+            originName = place.street?.isNotEmpty == true
+                ? place.street!
+                : "${place.locality}, ${place.country}";
+          }
+        } catch (e) {
+          print("Error getting origin location name: $e");
+        }
+      }
+
+      // Try to get location name for destination
+      try {
+        List<Placemark> placemarks = await placemarkFromCoordinates(
+            destination.latitude, destination.longitude);
+        if (placemarks.isNotEmpty) {
+          Placemark place = placemarks.first;
+          destinationName = place.street?.isNotEmpty == true
+              ? place.street!
+              : "${place.locality}, ${place.country}";
+        }
+      } catch (e) {
+        print("Error getting destination location name: $e");
+      }
+
+      // Prepare request body according to server's expected format
+      final Map<String, dynamic> requestBody = {
+        "user_id": int.parse(_userId!),
+        "start_location": originName,
+        "end_location": destinationName,
+        "start_lat": origin.latitude,
+        "start_lon": origin.longitude,
+        "end_lat": destination.latitude,
+        "end_lon": destination.longitude
+      };
+
+      // Send POST request to server's history-search endpoint
+      final response = await http.post(
+        Uri.parse("$baseUrl/api/history-search"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode(requestBody),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data["success"] == true) {
+          print("Route history saved successfully.");
+        } else {
+          print("Failed to save route history: ${data['message']}");
+        }
+      } else {
+        print(
+            "Failed to save route history. Status code: ${response.statusCode}");
+      }
+    } catch (e) {
+      print("Error saving route history: $e");
+    }
+  }
+
+  Future<void> _createRoutePolylines(List<LatLng> points,
+      {required int routeIndex, required double opacity}) async {
+    final segments = await compute(createSegmentsInIsolate, {
+      'points': points,
+      'stations': _allStations,
+      'segmentLength': SEGMENT_LENGTH,
+    });
+
+    for (int i = 0; i < segments.length; i++) {
+      RouteSegment segment = segments[i];
+      String polylineId = "seg_${routeIndex}_$i";
+
+      Color segColor = segment.nearbyStations.isNotEmpty
+          ? getAQIColor(segment.nearbyStations.first['aqi'])
+          : const Color(0xFF2D3250);
+
+      _allPolylines[polylineId] = Polyline(
+        polylineId: PolylineId(polylineId),
+        points: segment.points,
+        color: segColor.withOpacity(opacity),
+        width: 5,
+        onTap: () => showSegmentInfo(context, segment),
+      );
+    }
+  }
+
+  Future<void> _processRouteSegments(
+      List<LatLng> points, int routeIndex) async {
+    List<RouteCalculation> calculations = [];
+    double totalAqi = 0;
+    double totalDistance = 0;
+
+    final segments = await compute(createSegmentsInIsolate, {
+      'points': points,
+      'stations': _allStations,
+      'segmentLength': SEGMENT_LENGTH,
+    });
+
+    Map<String, StationAccumulator> stationAccumulators = {};
+
+    for (var segment in segments) {
+      if (segment.nearbyStations.isNotEmpty) {
+        String stationName = segment.nearbyStations[0]['name'];
+        double segmentDistance = haversine(
+            segment.points.first.latitude,
+            segment.points.first.longitude,
+            segment.points.last.latitude,
+            segment.points.last.longitude);
+        totalDistance += segmentDistance;
+
+        stationAccumulators.putIfAbsent(
+          stationName,
+          () => StationAccumulator(
+            startDistance: totalDistance - segmentDistance,
+            endDistance: totalDistance,
+            sumAqi: 0,
+            count: 0,
+          ),
+        );
+
+        var accumulator = stationAccumulators[stationName]!;
+        accumulator.sumAqi += segment.aqi;
+        accumulator.count++;
+        accumulator.endDistance = totalDistance;
+      }
+    }
+
+    var sortedStations = stationAccumulators.entries.toList()
+      ..sort((a, b) => a.value.startDistance.compareTo(b.value.startDistance));
+
+    for (var entry in sortedStations) {
+      calculations.add(RouteCalculation(
+        stationName: entry.key,
+        startDistance: entry.value.startDistance,
+        endDistance: entry.value.endDistance,
+        aqi: (entry.value.sumAqi / entry.value.count).round(),
+      ));
+
+      double segmentLength =
+          entry.value.endDistance - entry.value.startDistance;
+      totalAqi += (entry.value.sumAqi / entry.value.count) * segmentLength;
+    }
+
+    double avgAqi = totalDistance > 0 ? totalAqi / totalDistance : 0;
+
+    if (mounted) {
+      setState(() {
+        _routeOptions.add(RouteOption(
+          routeIndex: routeIndex,
+          avgAqi: avgAqi,
+          calculations: calculations,
+          isSafest: routeIndex == _safestRouteIndex,
+          displayIndex: routeIndex,
+        ));
       });
     }
   }
 
-  Widget _buildCustomInfoWindow(Map<String, dynamic> station) {
-    String updatedText = "N/A";
-    if (station.containsKey("timestamp") && station["timestamp"] != null) {
-      try {
-        DateTime updatedTime = DateTime.parse(station["timestamp"]);
-        final hoursAgo = DateTime.now().difference(updatedTime).inHours;
-        updatedText = "$hoursAgo hour(s) ago";
-      } catch (e) {
-        updatedText = "N/A";
-      }
-    }
-    int aqi = int.tryParse(station["aqi"]?.toString() ?? "0") ?? 0;
-    String emoji;
-    String level;
-    if (aqi <= 50) {
-      emoji = "😊";
-      level = "Good";
-    } else if (aqi <= 100) {
-      emoji = "😐";
-      level = "Moderate";
-    } else if (aqi <= 150) {
-      emoji = "😷";
-      level = "Unhealthy for Sensitive Groups";
-    } else if (aqi <= 200) {
-      emoji = "😫";
-      level = "Unhealthy";
-    } else if (aqi <= 300) {
-      emoji = "🤒";
-      level = "Very Unhealthy";
-    } else {
-      emoji = "💀";
-      level = "Hazardous";
-    }
-    return Card(
-      color: _isDarkMode ? const Color(0xFF2D3250) : Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      elevation: 8,
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        width: MediaQuery.of(context).size.width * 0.8,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Text(
-                    station["station_name"] ?? "Station",
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: _isDarkMode ? Colors.white : Colors.black,
-                    ),
-                  ),
-                ),
-                GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      _selectedStationDetail = null;
-                      _selectedMarkerLatLng = null;
-                      _infoWindowOffset = null;
-                    });
-                  },
-                  child: Icon(
-                    Icons.close,
-                    color: _isDarkMode ? Colors.white : Colors.black,
-                    size: 20,
-                  ),
-                )
-              ],
-            ),
-            const Divider(),
-            Row(
-              children: [
-                Expanded(
-                  child: Center(
-                    child: Text(
-                      emoji,
-                      style: const TextStyle(fontSize: 28),
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: Center(
-                    child: Text(
-                      "$aqi - $level",
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: _isDarkMode ? Colors.white70 : Colors.black87,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Center(
-              child: Text(
-                "Latest updated $updatedText",
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: _isDarkMode ? Colors.white70 : Colors.black54,
-                ),
-              ),
-            ),
-            const Divider(),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: () {
-                  Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => DetailsPage(
-                              config: widget.config,
-                              station: _selectedStationDetail!)));
-                },
-                child: Text(
-                  "See more details",
-                  style: TextStyle(
-                    color: _isDarkMode ? Colors.orange[200] : Colors.orange,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRouteSelector() {
-    if (_routePolylines.isEmpty) return const SizedBox.shrink();
-    return Positioned(
-      bottom: (_selectedStationDetail != null) ? 120 : 20,
-      left: 0,
-      right: 0,
-      child: Container(
-        height: 50,
-        color: _isDarkMode ? Colors.black.withOpacity(0.5) : Colors.white70,
-        child: _isRoutePlotting
-            ? Center(
-                child: CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                      _isDarkMode ? Colors.white : Colors.black),
-                ),
-              )
-            : ListView.builder(
-                scrollDirection: Axis.horizontal,
-                itemCount: _routePolylines.keys.length,
-                itemBuilder: (context, index) {
-                  bool selected = index == _selectedRouteIndex;
-                  return GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        _selectedRouteIndex = index;
-                        _updateRouteVisibility(index);
-                      });
-                    },
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 6),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: selected ? Colors.orange : Colors.grey,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            "Route ${index + 1}",
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          if (index == _safestRouteIndex)
-                            const Padding(
-                              padding: EdgeInsets.only(left: 4),
-                              child: Icon(Icons.verified,
-                                  color: Colors.white, size: 16),
-                            ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-              ),
-      ),
-    );
-  }
-
-  void _onMapCreated(GoogleMapController controller) {
-    _mapController = controller;
-    _mapController!.setMapStyle(_isDarkMode ? darkMapStyle : lightMapStyle);
-
-    // Center on user location when map is ready
-    if (_currentLocation != null) {
-      _mapController!
-          .animateCamera(CameraUpdate.newLatLngZoom(_currentLocation!, 14));
-    }
-
-    // Handle route arguments after map is ready
-    if (!_hasHandledRouteArguments) {
-      _handleRouteArguments();
-    }
-  }
-
-  void _onUseCurrentLocationForStart() {
-    if (_currentLocation != null) {
-      print("Using current location as start point");
-    }
-  }
-
-  Future<void> _logSearchQuery(String start, String end, String travelMode,
-      LatLng? startCoordinates, LatLng? endCoordinates) async {
-    if (_userId == null) {
-      print("Cannot log search: User ID is null");
-      return;
-    }
-
-    final url = Uri.parse('$baseUrl/api/search-history');
-    try {
-      final response = await http.post(
-        url,
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-        },
-        body: jsonEncode({
-          "userId": _userId,
-          "startLocation": {
-            "name": start,
-            "latitude": startCoordinates?.latitude,
-            "longitude": startCoordinates?.longitude,
-          },
-          "endLocation": {
-            "name": end,
-            "latitude": endCoordinates?.latitude,
-            "longitude": endCoordinates?.longitude,
-          },
-          "travelMode": travelMode,
-          "timestamp": DateTime.now().toIso8601String(),
-        }),
-      );
-
-      if (response.statusCode != 200) {
-        print("Failed to log search history: ${response.statusCode}");
-        print("Response body: ${response.body}");
-      }
-    } catch (e) {
-      print("Error logging search history: $e");
-    }
-  }
-
-  /// Process route segments with color caching
-  Future<void> _processRouteSegments(
-      List<LatLng> points, int routeIndex) async {
-    _routeSafetyScores[routeIndex] = _calculateRouteSafetyScore(points);
-
-    final segments = await _getRouteSegments(points);
-    if (segments == null) return;
-
-    for (int i = 0; i < segments.length; i++) {
-      final seg = segments[i];
-      final segStart = LatLng(seg["start"]["lat"], seg["start"]["lon"]);
-      final segEnd = LatLng(seg["end"]["lat"], seg["end"]["lon"]);
-
-      final segmentId =
-          "${segStart.latitude},${segStart.longitude}-${segEnd.latitude},${segEnd.longitude}";
-
-      // Use cached color if available
-      Color segColor = _segmentColors[segmentId] ?? _colorFromHex(seg["color"]);
-      _segmentColors[segmentId] = segColor;
-
-      String polylineId = "seg_${routeIndex}_$i";
-      _allPolylines[polylineId] = Polyline(
-        polylineId: PolylineId(polylineId),
-        points: [segStart, segEnd],
-        color:
-            segColor.withOpacity(routeIndex == _selectedRouteIndex ? 1.0 : 0.3),
-        width: 5,
-      );
-    }
-  }
-
-  /// Fetch route segments from the server
-  Future<List<dynamic>?> _getRouteSegments(List<LatLng> points) async {
-    final url = Uri.parse("$baseUrl/api/route-segmentation");
-    final routePayload = {
-      "route": points.map((point) {
-        return {"lat": point.latitude, "lon": point.longitude};
-      }).toList()
-    };
-    try {
-      final response = await http.post(url,
-          headers: {"Content-Type": "application/json"},
-          body: jsonEncode(routePayload));
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data["success"] == true) {
-          return data["segments"];
-        } else {
-          print("Segmentation API error: ${data['error']}");
-        }
-      } else {
-        print("Error fetching segmentation: ${response.statusCode}");
-      }
-    } catch (e) {
-      print("Exception in _getRouteSegments: $e");
-    }
-    return null;
-  }
-
-  /// Update route visibility when switching routes
   void _updateRouteVisibility(int selectedIndex) {
-    polylines = Map.fromEntries(_allPolylines.entries.map((entry) {
-      final routeIndex = int.tryParse(entry.key.split('_')[1]) ?? -1;
-      return MapEntry(
-          PolylineId(entry.key),
-          entry.value.copyWith(
-              colorParam: entry.value.color
-                  .withOpacity(routeIndex == selectedIndex ? 1.0 : 0.3)));
-    }));
+    setState(() {
+      _userSelectedRouteIndex = selectedIndex;
+      _activeStationIds.clear();
+      final selectedOption = _routeOptions.firstWhere(
+        (option) => option.routeIndex == selectedIndex,
+        orElse: () => _routeOptions[0],
+      );
+      for (var calc in selectedOption.calculations) {
+        _activeStationIds.add(calc.stationName);
+      }
 
-    // Update markers for selected route
+      polylines = Map.fromEntries(_allPolylines.entries.map((entry) {
+        final routeIndex = int.tryParse(entry.key.split('_')[1]) ?? -1;
+        return MapEntry(
+            PolylineId(entry.key),
+            entry.value.copyWith(
+                colorParam: entry.value.color
+                    .withOpacity(routeIndex == selectedIndex ? 1.0 : 0.3)));
+      }));
+    });
+
     _updateMarkers();
+    _startLocationUpdates();
   }
 
-  /// Update markers opacity based on selected route
   void _updateMarkers() {
     if (!_routePolylines.containsKey(_selectedRouteIndex)) return;
 
@@ -1109,53 +740,614 @@ class _MapPageState extends State<MapPage> {
     _populateAllMarkers(selectedRoute: selectedRoute);
   }
 
-  void _showSegmentInfo(RouteSegment segment) {
-    showDialog(
+  void _startLocationUpdates() {
+    _positionStreamSubscription?.cancel();
+    _positionStreamSubscription = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 5,
+      ),
+    ).listen((Position position) {
+      setState(() {
+        _currentLocation = LatLng(position.latitude, position.longitude);
+        if (_routeOptions.isNotEmpty && !_showRouteProgress) {
+          _showRouteProgress = true;
+        }
+      });
+      _updateNearestStation();
+    });
+  }
+
+  void _updateNearestStation() {
+    if (_currentLocation == null || _routeOptions.isEmpty) return;
+
+    double minDistance = double.infinity;
+    String? nearestStation;
+    int nearestStationAqi = 0;
+
+    final selectedRoute = _routeOptions.firstWhere(
+      (option) => option.routeIndex == _userSelectedRouteIndex,
+      orElse: () => _routeOptions[0],
+    );
+
+    RouteCalculation? nearestCalculation;
+
+    for (var calc in selectedRoute.calculations) {
+      for (var station in _allStations) {
+        if (station["station_name"] == calc.stationName) {
+          double? lat = double.tryParse(station["lat"]?.toString() ?? "");
+          double? lon = double.tryParse(station["lon"]?.toString() ?? "");
+
+          if (lat != null && lon != null) {
+            double distance = haversine(
+              _currentLocation!.latitude,
+              _currentLocation!.longitude,
+              lat,
+              lon,
+            );
+
+            if (distance < minDistance) {
+              minDistance = distance;
+              nearestStation = calc.stationName;
+              nearestStationAqi = calc.aqi;
+              nearestCalculation = calc;
+            }
+          }
+        }
+      }
+    }
+
+    // Find the highest AQI zone in the route
+    RouteCalculation? worstZone;
+    int highestAqi = 0;
+
+    for (var calc in selectedRoute.calculations) {
+      if (calc.aqi > highestAqi) {
+        highestAqi = calc.aqi;
+        worstZone = calc;
+      }
+    }
+
+    // Calculate time and distance to worst zone if found
+    String? timeToWorstZone;
+    String? distanceToWorstZone;
+
+    if (worstZone != null && nearestCalculation != null) {
+      // Only calculate if worst zone is ahead of current position
+      if (worstZone.startDistance > nearestCalculation.endDistance) {
+        // Calculate distance in km
+        double distanceKm =
+            worstZone.startDistance - nearestCalculation.endDistance;
+        distanceToWorstZone = distanceKm < 1.0
+            ? "${(distanceKm * 1000).toInt()}m"
+            : "${distanceKm.toStringAsFixed(1)}km";
+
+        // Estimate time based on average walking/driving speed
+        // Assuming average speed of 30 km/h
+        double timeHours = distanceKm / 30.0;
+        if (timeHours < 1.0 / 60.0) {
+          // Less than a minute
+          timeToWorstZone = "< 1 min";
+        } else if (timeHours < 1.0) {
+          // Less than an hour
+          timeToWorstZone = "${(timeHours * 60).toInt()} min";
+        } else {
+          timeToWorstZone = "${timeHours.toStringAsFixed(1)} hours";
+        }
+      }
+    }
+
+    if (mounted) {
+      // Update UI
+      setState(() {
+        _nearestStationName = nearestStation;
+      });
+
+      // Show notifications only on Android if enabled
+      if (_showNotification &&
+          nearestCalculation != null &&
+          nearestStation != null) {
+        final totalRouteDistance = _getTotalRouteDistance();
+        if (totalRouteDistance > 0) {
+          int progressPercent =
+              ((nearestCalculation.endDistance / totalRouteDistance) * 100)
+                  .round();
+
+          // Only show Android system notifications with new time and distance info
+          if (Platform.isAndroid) {
+            AndroidNotificationService.showRouteProgressNotification(
+              nearestStationName: nearestStation,
+              progressPercent: progressPercent,
+              aqi: nearestStationAqi,
+              timeToWorstZone: timeToWorstZone,
+              distanceToWorstZone: distanceToWorstZone,
+            );
+          }
+        }
+      }
+    }
+  }
+
+  String? _findNearestStationInRoute(LatLng userLocation, RouteOption route) {
+    if (route.calculations.isEmpty) return null;
+
+    String? nearestStation;
+    double minDistance = double.infinity;
+
+    for (var station in _allStations) {
+      if (!route.calculations
+          .any((calc) => calc.stationName == station['station_name'])) {
+        continue;
+      }
+
+      double? lat = double.tryParse(station["lat"]?.toString() ?? "");
+      double? lon = double.tryParse(station["lon"]?.toString() ?? "");
+
+      if (lat == null || lon == null) continue;
+
+      double distance =
+          haversine(userLocation.latitude, userLocation.longitude, lat, lon);
+
+      if (distance < minDistance) {
+        minDistance = distance;
+        nearestStation = station['station_name'];
+      }
+    }
+
+    return nearestStation;
+  }
+
+  void _showFilterDialog() {
+    showGeneralDialog(
       context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Segment Info'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('AQI: ${segment.aqi.toStringAsFixed(2)}'),
-              if (segment.nearbyStations.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text('Nearest Station:'),
-                ListTile(
-                  title: Text(segment.nearbyStations[0]['name']),
-                  subtitle: Text(
-                    'Distance: ${segment.nearbyStations[0]['distance'].toStringAsFixed(2)} km',
+      barrierDismissible: true,
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return Align(
+          alignment: Alignment.centerRight,
+          child: SafeArea(
+            child: SizedBox(
+              width: MediaQuery.of(context).size.width * 0.85,
+              height: MediaQuery.of(context).size.height,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(1, 0),
+                  end: Offset.zero,
+                ).animate(CurvedAnimation(
+                  parent: animation,
+                  curve: Curves.easeOut,
+                )),
+                child: Material(
+                  color: Provider.of<ThemeProvider>(context, listen: false)
+                          .isDarkMode
+                      ? const Color(0xFF2D3250)
+                      : Colors.white,
+                  child: StatefulBuilder(
+                    builder: (context, setState) {
+                      return Column(
+                        children: [
+                          AppBar(
+                            backgroundColor: Provider.of<ThemeProvider>(context,
+                                        listen: false)
+                                    .isDarkMode
+                                ? const Color(0xFF2D3250)
+                                : Colors.white,
+                            elevation: 0,
+                            title: Text(
+                              'Filter Stations',
+                              style: TextStyle(
+                                color: Provider.of<ThemeProvider>(context,
+                                            listen: false)
+                                        .isDarkMode
+                                    ? Colors.white
+                                    : Colors.black,
+                              ),
+                            ),
+                            leading: Container(),
+                            actions: [
+                              IconButton(
+                                icon: Icon(
+                                  Icons.close,
+                                  color: Provider.of<ThemeProvider>(context,
+                                              listen: false)
+                                          .isDarkMode
+                                      ? Colors.white
+                                      : Colors.black,
+                                ),
+                                onPressed: () => Navigator.pop(context),
+                              ),
+                            ],
+                          ),
+                          Expanded(
+                            child: SingleChildScrollView(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Parameter',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      color: Provider.of<ThemeProvider>(context,
+                                                  listen: false)
+                                              .isDarkMode
+                                          ? Colors.white
+                                          : Colors.black,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 12, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: Provider.of<ThemeProvider>(context,
+                                                  listen: false)
+                                              .isDarkMode
+                                          ? Colors.black12
+                                          : Colors.grey[100],
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: Provider.of<ThemeProvider>(
+                                                    context,
+                                                    listen: false)
+                                                .isDarkMode
+                                            ? Colors.grey[800]!
+                                            : Colors.grey[300]!,
+                                      ),
+                                    ),
+                                    child: DropdownButtonHideUnderline(
+                                      child: DropdownButton<String>(
+                                        isExpanded: true,
+                                        value: _selectedParameter,
+                                        dropdownColor:
+                                            Provider.of<ThemeProvider>(context,
+                                                        listen: false)
+                                                    .isDarkMode
+                                                ? const Color(0xFF2D3250)
+                                                : Colors.white,
+                                        style: TextStyle(
+                                          color: Provider.of<ThemeProvider>(
+                                                      context,
+                                                      listen: false)
+                                                  .isDarkMode
+                                              ? Colors.white
+                                              : Colors.black,
+                                        ),
+                                        items: _parameters.map((String value) {
+                                          return DropdownMenuItem<String>(
+                                            value: value,
+                                            child: Text(value),
+                                          );
+                                        }).toList(),
+                                        onChanged: (String? value) {
+                                          if (value != null) {
+                                            setState(() {
+                                              _selectedParameter = value;
+                                            });
+                                            _fetchAllAQIStations();
+                                            Navigator.pop(context);
+                                          }
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 24),
+                                  Text(
+                                    'Source',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      color: Provider.of<ThemeProvider>(context,
+                                                  listen: false)
+                                              .isDarkMode
+                                          ? Colors.white
+                                          : Colors.black,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 12, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: Provider.of<ThemeProvider>(context,
+                                                  listen: false)
+                                              .isDarkMode
+                                          ? Colors.black12
+                                          : Colors.grey[100],
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: Provider.of<ThemeProvider>(
+                                                    context,
+                                                    listen: false)
+                                                .isDarkMode
+                                            ? Colors.grey[800]!
+                                            : Colors.grey[300]!,
+                                      ),
+                                    ),
+                                    child: DropdownButtonHideUnderline(
+                                      child: DropdownButton<String>(
+                                        isExpanded: true,
+                                        value: _selectedSource,
+                                        dropdownColor:
+                                            Provider.of<ThemeProvider>(context,
+                                                        listen: false)
+                                                    .isDarkMode
+                                                ? const Color(0xFF2D3250)
+                                                : Colors.white,
+                                        style: TextStyle(
+                                          color: Provider.of<ThemeProvider>(
+                                                      context,
+                                                      listen: false)
+                                                  .isDarkMode
+                                              ? Colors.white
+                                              : Colors.black,
+                                        ),
+                                        items: _sources.map((String value) {
+                                          return DropdownMenuItem<String>(
+                                            value: value,
+                                            child: Text(value),
+                                          );
+                                        }).toList(),
+                                        onChanged: (String? value) {
+                                          if (value != null) {
+                                            setState(() {
+                                              _selectedSource = value;
+                                            });
+                                            _fetchAllAQIStations();
+                                            Navigator.pop(context);
+                                          }
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ),
-              ],
-            ],
-          ),
-          actions: [
-            TextButton(
-              child: const Text('Close'),
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
+              ),
             ),
-          ],
+          ),
         );
       },
+      transitionDuration: const Duration(milliseconds: 250),
     );
+  }
+
+  double _getTotalRouteDistance() {
+    if (_routeOptions.isEmpty || _userSelectedRouteIndex < 0) {
+      return 0.0;
+    }
+
+    final route = _routeOptions.firstWhere(
+      (option) => option.routeIndex == _userSelectedRouteIndex,
+      orElse: () => _routeOptions[0],
+    );
+
+    if (route.calculations.isEmpty) {
+      return 0.0;
+    }
+
+    return route.calculations.last.endDistance;
+  }
+
+  // Add a method to estimate arrival time based on average speed
+  DateTime _calculateEstimatedArrivalTime() {
+    // If no route is selected or no distance is available, return current time
+    if (_routeOptions.isEmpty || _getTotalRouteDistance() <= 0) {
+      return DateTime.now();
+    }
+
+    // Calculate remaining distance in km
+    double totalDistance = _getTotalRouteDistance();
+    double remainingDistance = totalDistance;
+
+    // If user is already on the route, calculate remaining distance
+    if (_nearestStationName != null && _currentLocation != null) {
+      final route = _routeOptions.firstWhere(
+        (option) => option.routeIndex == _userSelectedRouteIndex,
+        orElse: () => _routeOptions[0],
+      );
+
+      final nearestCalculation = route.calculations.firstWhere(
+        (calc) => calc.stationName == _nearestStationName,
+        orElse: () => route.calculations.first,
+      );
+
+      // Estimate remaining distance
+      remainingDistance = totalDistance - nearestCalculation.endDistance;
+      if (remainingDistance < 0) remainingDistance = totalDistance;
+    }
+
+    // Assume average speed of 30 km/h (urban environment)
+    const double averageSpeedKmh = 30.0;
+
+    // Calculate time in hours
+    double timeHours = remainingDistance / averageSpeedKmh;
+
+    // Calculate arrival time
+    return DateTime.now().add(Duration(minutes: (timeHours * 60).round()));
+  }
+
+  // Predict AQI at destination at arrival time
+  int _predictDestinationAQI() {
+    // If no routes or no predictions, return 0
+    if (_routeOptions.isEmpty) {
+      return 0;
+    }
+
+    // Get arrival time and calculate prediction index based on travel hours
+    final DateTime arrivalTime = _calculateEstimatedArrivalTime();
+    final DateTime now = DateTime.now();
+
+    // Calculate hours difference with proper rounding (round up if minutes > 30, down otherwise)
+    final Duration difference = arrivalTime.difference(now);
+    int hoursFromNow = difference.inMinutes ~/ 60; // Integer division for hours
+
+    // Apply rounding based on remaining minutes
+    int remainingMinutes = difference.inMinutes % 60;
+    if (remainingMinutes > 30) {
+      hoursFromNow += 1; // Round up if more than 30 minutes
+    }
+
+    // If we don't have predictions or the hoursFromNow is out of range, use fallback
+    if (_predictions.isEmpty ||
+        hoursFromNow >= _predictions.length ||
+        hoursFromNow < 0) {
+      return _getFallbackAQIValue();
+    }
+
+    // Return the predicted AQI at the calculated hour
+    return _predictions[hoursFromNow]['aqi'];
+  }
+
+  // Helper method to get fallback AQI value from route calculations
+  int _getFallbackAQIValue() {
+    // Use last station in route (destination) as fallback
+    if (_routeOptions.isNotEmpty) {
+      final routeOption = _routeOptions.firstWhere(
+        (option) => option.routeIndex == _userSelectedRouteIndex,
+        orElse: () => _routeOptions[0],
+      );
+
+      if (routeOption.calculations.isNotEmpty) {
+        return routeOption.calculations.last.aqi;
+      }
+    }
+
+    // Default value if no options available
+    return 0;
+  }
+
+  // Add a method to fetch AQI predictions for the destination
+  Future<void> _fetchDestinationPredictions(LatLng destination) async {
+    try {
+      // Find the nearest station to the destination point
+      double minDistance = double.infinity;
+      Map<String, dynamic>? nearestStation;
+
+      for (var station in _allStations) {
+        double? lat = double.tryParse(station["lat"]?.toString() ?? "");
+        double? lon = double.tryParse(station["lon"]?.toString() ?? "");
+
+        if (lat != null && lon != null) {
+          double distance =
+              haversine(destination.latitude, destination.longitude, lat, lon);
+
+          if (distance < minDistance) {
+            minDistance = distance;
+            nearestStation = station;
+          }
+        }
+      }
+
+      // Create a request body with either station_id or coordinates
+      final Map<String, dynamic> requestBody = {
+        "latitude": destination.latitude,
+        "longitude": destination.longitude,
+      };
+
+      // Add station_id if we found a nearby station
+      if (nearestStation != null && nearestStation.containsKey('station_id')) {
+        requestBody['station_id'] = nearestStation['station_id'].toString();
+      }
+
+      final url = "$baseUrl/api/aqi-prediction";
+      final response = await http.post(
+        Uri.parse(url),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode(requestBody),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data["success"] == true && data.containsKey("predictions")) {
+          setState(() {
+            _predictions = List<Map<String, dynamic>>.from(data["predictions"]);
+          });
+        } else {
+          // Fallback to generate prediction data
+          _generateFallbackPredictions();
+        }
+      } else {
+        // Fallback to generate prediction data
+        _generateFallbackPredictions();
+      }
+    } catch (e) {
+      print("Error fetching destination predictions: $e");
+      // Fallback to generate prediction data
+      _generateFallbackPredictions();
+    }
+  }
+
+  // Add a fallback method to generate prediction data when API fails
+  void _generateFallbackPredictions() {
+    // Get the destination AQI (if we're in route mode)
+    int destinationAqi = 0;
+
+    if (_routeOptions.isNotEmpty) {
+      // Use the last station in the route (destination area)
+      final route = _routeOptions.firstWhere(
+        (option) => option.routeIndex == _userSelectedRouteIndex,
+        orElse: () => _routeOptions[0],
+      );
+
+      if (route.calculations.isNotEmpty) {
+        destinationAqi = route.calculations.last.aqi;
+      }
+    } else if (_allStations.isNotEmpty) {
+      // If no route, use average AQI
+      destinationAqi = _allStations.fold(0, (sum, station) {
+            int aqi = int.tryParse(station['aqi']?.toString() ?? '0') ?? 0;
+            return sum + aqi;
+          }) ~/
+          _allStations.length;
+    } else {
+      // Default modest AQI if no data
+      destinationAqi = 0;
+    }
+
+    // Create predictions for next 24 hours with slight variations
+    _predictions = [];
+
+    final random = math.Random();
+    final now = DateTime.now();
+
+    // Base the predictions on destination AQI with reasonable fluctuations
+    for (int i = 0; i < 24; i++) {
+      // Add random fluctuation of +/- 15%
+      final fluctuation = (random.nextDouble() * 0.3) - 0.15;
+      final predictedAqi = (destinationAqi * (1 + fluctuation)).round();
+
+      // Create a prediction entry
+      _predictions.add({
+        'timestamp': now.add(Duration(hours: i)).toIso8601String(),
+        'aqi': predictedAqi.clamp(20, 300), // Keep in reasonable range
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    // Get the current theme from provider
+    final themeProvider = Provider.of<ThemeProvider>(context);
+    final bool isDarkMode = themeProvider.isDarkMode;
+
     return Scaffold(
       key: _scaffoldKey,
-      backgroundColor: _isDarkMode ? const Color(0xFF2C2C47) : Colors.white,
+      backgroundColor: isDarkMode ? const Color(0xFF2C2C47) : Colors.white,
       appBar: AppBar(
-        backgroundColor: _isDarkMode ? const Color(0xFF2C2C47) : Colors.white,
+        backgroundColor: isDarkMode ? const Color(0xFF2C2C47) : Colors.white,
         elevation: 0,
         leading: Builder(
           builder: (context) => IconButton(
             icon: Icon(Icons.menu,
-                color: _isDarkMode ? Colors.white : Colors.black),
+                color: isDarkMode ? Colors.white : Colors.black),
             onPressed: () {
               _scaffoldKey.currentState?.openDrawer();
             },
@@ -1164,17 +1356,18 @@ class _MapPageState extends State<MapPage> {
         actions: [
           Row(
             children: [
-              Icon(_isDarkMode ? Icons.nightlight_round : Icons.wb_sunny,
-                  color: _isDarkMode ? Colors.white : Colors.black),
+              Icon(isDarkMode ? Icons.nightlight_round : Icons.wb_sunny,
+                  color: isDarkMode ? Colors.white : Colors.black),
               Switch(
-                value: _isDarkMode,
+                value: isDarkMode,
                 onChanged: (bool value) {
-                  setState(() {
-                    _isDarkMode = value;
-                  });
+                  // Update the theme using the provider
+                  Provider.of<ThemeProvider>(context, listen: false)
+                      .toggleTheme(value);
+
                   if (_mapController != null) {
-                    _mapController!.setMapStyle(
-                        _isDarkMode ? darkMapStyle : lightMapStyle);
+                    _mapController!
+                        .setMapStyle(isDarkMode ? darkMapStyle : lightMapStyle);
                   }
                 },
                 activeColor: Colors.orange,
@@ -1186,49 +1379,56 @@ class _MapPageState extends State<MapPage> {
           ),
         ],
       ),
-      drawer: buildDrawer(context: context, isDarkMode: _isDarkMode),
-      endDrawer: CombinedSearchSection(
-        isDarkMode: _isDarkMode,
-        onSubmit: (String start, String end, String travelMode,
-            {LatLng? startCoordinates, LatLng? endCoordinates}) async {
-          LatLng? origin = startCoordinates ??
-              await _getLatLngFromAddress(start) ??
-              _currentLocation;
-          LatLng? destination =
-              endCoordinates ?? await _getLatLngFromAddress(end);
-          if (origin != null && destination != null) {
-            await _logSearchQuery(start, end, travelMode, origin, destination);
-            await _loadRoute(origin, destination, travelMode);
-          } else {
-            print("Failed to get origin or destination coordinates.");
-          }
-        },
-        onUseCurrentLocationForStart: _onUseCurrentLocationForStart,
-        googleApiKey: widget.config.googleApiKey,
-        selectedSource: _selectedSource,
-        sources: _sources,
-        onSourceChanged: (String? newSource) {
-          if (newSource != null) {
+      drawer: buildDrawer(context: context, isDarkMode: isDarkMode),
+      endDrawer: Container(
+        color: const Color(0xFF2D3250),
+        child: search.MapSearchSection(
+          isDarkMode: isDarkMode,
+          onSubmit: (String start, String end, String travelMode,
+              {LatLng? startCoordinates, LatLng? endCoordinates}) async {
+            LatLng? origin = startCoordinates ??
+                await getLatLngFromAddress(start, _currentLocation) ??
+                _currentLocation;
+            LatLng? destination = endCoordinates ??
+                await getLatLngFromAddress(end, _currentLocation);
+
+            if (origin != null && destination != null) {
+              setState(() {
+                _routeOptions = [];
+                _isRouteLoading = true;
+              });
+              await _loadRoute(origin, destination, travelMode);
+            }
+          },
+          selectedRouteIndex: _userSelectedRouteIndex,
+          onRouteSelected: (int index) {
             setState(() {
-              _selectedSource = newSource;
+              _selectedRouteIndex = index;
+              _updateRouteVisibility(index);
             });
-            _fetchAllAQIStations();
-          }
-        },
-        selectedParameter: _selectedParameter,
-        parameters: _parameters,
-        onParameterChanged: (String? newParam) {
-          if (newParam != null) {
-            setState(() {
-              _selectedParameter = newParam;
-            });
-            _fetchAllAQIStations();
-          }
-        },
-        isRouteLoading: _isRouteLoading,
-        markersLoaded: _markersLoaded,
-        userId: _userId,
-        currentLocation: _currentLocation,
+            Navigator.pop(context);
+          },
+          routeOptions: _routeOptions
+              .map((ro) => search.RouteOption(
+                    routeIndex: ro.routeIndex,
+                    avgAqi: ro.avgAqi,
+                    calculations: ro.calculations
+                        .map((calc) => search.RouteCalculation(
+                              stationName: calc.stationName,
+                              startDistance: calc.startDistance,
+                              endDistance: calc.endDistance,
+                              aqi: calc.aqi,
+                            ))
+                        .toList(),
+                    isSafest: ro.isSafest,
+                    displayIndex: ro.displayIndex,
+                  ))
+              .toList(),
+          googleApiKey: widget.config.googleApiKey,
+          currentLocation: _currentLocation,
+          isRouteLoading: _isRouteLoading,
+          backgroundColor: const Color(0xFF2D3250),
+        ),
       ),
       body: Stack(
         children: [
@@ -1241,9 +1441,136 @@ class _MapPageState extends State<MapPage> {
             myLocationEnabled: true,
             markers: _markers,
             polylines: Set<Polyline>.of(polylines.values),
-            onCameraMove: (position) {},
+            onCameraMove: (_) {},
           ),
-          _buildRouteSelector(),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.only(right: 16.0),
+              child: FloatingOptions(
+                onRouteSearch: () {
+                  _scaffoldKey.currentState?.openEndDrawer();
+                },
+                onFilter: _showFilterDialog,
+                onReset: () async {
+                  setState(() {
+                    _markers.clear();
+                    polylines.clear();
+                    _routePolylines.clear();
+                    _allPolylines.clear();
+                    _routeSafetyScores.clear();
+                    _selectedRouteIndex = 0;
+                    _safestRouteIndex = null;
+                    _isRoutePlotting = false;
+                    _selectedStationDetail = null;
+                    _selectedMarkerLatLng = null;
+                    _segmentColors.clear();
+                    _activeStationIds.clear();
+                    _routeOptions = [];
+                  });
+                  await _fetchAllAQIStations();
+                },
+                isDarkMode: isDarkMode,
+              ),
+            ),
+          ),
+          if (_routeOptions.isNotEmpty)
+            Positioned(
+              left: 16,
+              bottom: _showRouteProgress ? 150 : 30,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  FloatingActionButton.extended(
+                    onPressed: () {
+                      setState(() {
+                        _showRouteProgress = !_showRouteProgress;
+                      });
+                    },
+                    icon: Icon(
+                      _showRouteProgress
+                          ? Icons.visibility_off
+                          : Icons.visibility,
+                      color: isDarkMode ? Colors.white : Colors.black,
+                    ),
+                    label: Text(
+                      _showRouteProgress ? 'Hide Progress' : 'Show Progress',
+                      style: TextStyle(
+                        color: isDarkMode ? Colors.white : Colors.black,
+                      ),
+                    ),
+                    backgroundColor:
+                        isDarkMode ? const Color(0xFF2D3250) : Colors.white,
+                  ),
+                  const SizedBox(height: 8),
+                  FloatingActionButton.extended(
+                    onPressed: () {
+                      setState(() {
+                        _showNotification = !_showNotification;
+                        if (_showNotification) {
+                          _updateNearestStation();
+                        } else if (Platform.isAndroid) {
+                          AndroidNotificationService
+                              .hideRouteProgressNotification();
+                        }
+                      });
+                    },
+                    icon: Icon(
+                      _showNotification
+                          ? Icons.notifications_active
+                          : Icons.notifications_off,
+                      color: isDarkMode ? Colors.white : Colors.black,
+                    ),
+                    label: Text(
+                      _showNotification ? 'Disable Alerts' : 'Enable Alerts',
+                      style: TextStyle(
+                        color: isDarkMode ? Colors.white : Colors.black,
+                      ),
+                    ),
+                    backgroundColor: _showNotification
+                        ? (isDarkMode ? const Color(0xFF2D3250) : Colors.white)
+                        : Colors.grey,
+                    heroTag: 'notificationBtn',
+                  ),
+                ],
+              ),
+            ),
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOut,
+            left: 0,
+            right: 0,
+            bottom: _showRouteProgress &&
+                    _routeOptions.isNotEmpty &&
+                    _userSelectedRouteIndex >= 0
+                ? 0
+                : -200,
+            child: _routeOptions.isNotEmpty && _userSelectedRouteIndex >= 0
+                ? RouteProgressDisplay(
+                    stations: _routeOptions
+                        .firstWhere(
+                          (option) =>
+                              option.routeIndex == _userSelectedRouteIndex,
+                          orElse: () => _routeOptions[0],
+                        )
+                        .calculations,
+                    nearestStationName: _nearestStationName,
+                    totalRouteDistance: _getTotalRouteDistance(),
+                    isDarkMode: isDarkMode,
+                    onClose: () {
+                      setState(() {
+                        _showRouteProgress = false;
+                      });
+                    },
+                    // Add estimated arrival time
+                    estimatedArrivalTime: _calculateEstimatedArrivalTime(),
+                    // Add predicted AQI
+                    predictedDestinationAqi: _predictDestinationAQI(),
+                  )
+                : const SizedBox.shrink(),
+          ),
+          // Moving this below the UI elements and modifying the styling
           if (_selectedStationDetail != null)
             Positioned(
               left: 0,
@@ -1259,209 +1586,34 @@ class _MapPageState extends State<MapPage> {
                               station: _selectedStationDetail!)));
                 },
                 child: Container(
-                  color: _isDarkMode ? const Color(0xFF2D3250) : Colors.white,
+                  decoration: BoxDecoration(
+                    color: isDarkMode ? const Color(0xFF2D3250) : Colors.white,
+                    // Remove any border here to prevent double borders
+                  ),
+                  margin: EdgeInsets.zero, // Remove any margin
                   padding: const EdgeInsets.all(12),
-                  child: _buildCustomInfoWindow(_selectedStationDetail!),
+                  child: buildCustomInfoWindow(
+                    _selectedStationDetail!,
+                    isDarkMode,
+                    onClose: () {
+                      setState(() {
+                        _selectedStationDetail = null;
+                      });
+                    },
+                  ),
                 ),
               ),
             ),
-          Align(
-            alignment: Alignment.centerRight,
-            child: Padding(
-              padding: const EdgeInsets.only(right: 16.0),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  FloatingActionButton(
-                    mini: true,
-                    onPressed: () {
-                      _scaffoldKey.currentState?.openEndDrawer();
-                    },
-                    backgroundColor:
-                        _isDarkMode ? Colors.grey[800] : Colors.white,
-                    child: Icon(Icons.settings,
-                        color: _isDarkMode ? Colors.white : Colors.black),
-                  ),
-                  const SizedBox(height: 16),
-                  FloatingActionButton(
-                    mini: true,
-                    onPressed: () async {
-                      setState(() {
-                        // Clear markers
-                        _markers.clear();
-
-                        // Clear route data
-                        polylines.clear();
-                        _routePolylines.clear();
-                        _allPolylines.clear();
-                        _routeSafetyScores.clear();
-                        _selectedRouteIndex = 0;
-                        _safestRouteIndex = null;
-                        _isRoutePlotting = false;
-
-                        // Clear selected station data
-                        _selectedStationDetail = null;
-                        _selectedMarkerLatLng = null;
-
-                        // Clear cached data
-                        _segmentColors.clear();
-                      });
-                      await _fetchAllAQIStations();
-                    },
-                    backgroundColor: Colors.redAccent,
-                    child: const Icon(Icons.refresh, color: Colors.white),
-                  ),
-                ],
+          if (_isLoadingMarkers)
+            Container(
+              color: Colors.black45,
+              child: const Center(
+                child: CircularProgressIndicator(),
               ),
             ),
-          ),
         ],
       ),
+      resizeToAvoidBottomInset: false,
     );
   }
-}
-
-/// Helper classes
-class RouteSegment {
-  final List<LatLng> points;
-  final double aqi;
-  final List<Map<String, dynamic>> nearbyStations; // Add nearby stations info
-
-  RouteSegment(
-      {required this.points,
-      required this.aqi,
-      this.nearbyStations = const []});
-}
-
-class WeightedStation {
-  final int aqi;
-  final double weight;
-  final String stationName; // Add station name
-  final double distance; // Add distance from segment
-
-  WeightedStation(
-      {required this.aqi,
-      required this.weight,
-      required this.stationName,
-      required this.distance});
-}
-
-// Add isolate computation functions
-List<RouteSegment> _createSegmentsInIsolate(Map<String, dynamic> params) {
-  final points = params['points'] as List<LatLng>;
-  final stations = params['stations'] as List<Map<String, dynamic>>;
-  final segmentLength = params['segmentLength'] as double;
-
-  List<RouteSegment> segments = [];
-  List<LatLng> currentSegment = [points.first];
-  double currentDistance = 0;
-
-  for (int i = 1; i < points.length; i++) {
-    LatLng prev = points[i - 1];
-    LatLng curr = points[i];
-
-    double segmentDistance =
-        haversine(prev.latitude, prev.longitude, curr.latitude, curr.longitude);
-
-    currentDistance += segmentDistance;
-    currentSegment.add(curr);
-
-    if (currentDistance >= segmentLength || i == points.length - 1) {
-      // Calculate segment center
-      double centerLat = 0, centerLon = 0;
-      for (var point in currentSegment) {
-        centerLat += point.latitude;
-        centerLon += point.longitude;
-      }
-      centerLat /= currentSegment.length;
-      centerLon /= currentSegment.length;
-
-      // Find nearest station regardless of distance
-      WeightedStation? nearestStation;
-      double minDistance = double.infinity;
-
-      for (var station in stations) {
-        double? lat = double.tryParse(station["lat"]?.toString() ?? "");
-        double? lon = double.tryParse(station["lon"]?.toString() ?? "");
-        int? aqi = int.tryParse(station["aqi"]?.toString() ?? "");
-
-        if (lat == null || lon == null || aqi == null || aqi <= 0) continue;
-
-        double distance = haversine(centerLat, centerLon, lat, lon);
-        if (distance < minDistance) {
-          minDistance = distance;
-          nearestStation = WeightedStation(
-            aqi: aqi,
-            weight: 1 / (distance + 0.1),
-            stationName: station["station_name"] ?? "Unknown",
-            distance: distance,
-          );
-        }
-      }
-
-      double finalAqi = nearestStation?.aqi.toDouble() ?? 0;
-      List<Map<String, dynamic>> stationInfo = nearestStation != null
-          ? [
-              {
-                'name': nearestStation.stationName,
-                'aqi': nearestStation.aqi,
-                'distance': nearestStation.distance,
-              }
-            ]
-          : [];
-
-      segments.add(RouteSegment(
-        points: List.from(currentSegment),
-        aqi: finalAqi,
-        nearbyStations: stationInfo,
-      ));
-
-      // Start new segment
-      currentSegment = [curr];
-      currentDistance = 0;
-    }
-  }
-
-  return segments;
-}
-
-Set<Marker> _createMarkersInIsolate(Map<String, dynamic> params) {
-  final stations = params['stations'] as List<Map<String, dynamic>>;
-  final currentLocation = params['currentLocation'] as LatLng?;
-  final selectedParameter = params['selectedParameter'] as String;
-  final markerCache = params['markerCache'] as Map<int, BitmapDescriptor>;
-
-  Set<Marker> markers = {};
-  if (currentLocation != null) {
-    markers.add(
-      Marker(
-        markerId: const MarkerId('user'),
-        position: currentLocation,
-        infoWindow: const InfoWindow(title: "Your Location"),
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
-      ),
-    );
-  }
-
-  for (var station in stations) {
-    double? lat = double.tryParse(station["lat"]?.toString() ?? "");
-    double? lon = double.tryParse(station["lon"]?.toString() ?? "");
-    int aqi = int.tryParse(station["aqi"]?.toString() ?? "") ?? 0;
-
-    if (aqi <= 0 || lat == null || lon == null) continue;
-
-    // Use cached marker icon
-    final markerIcon = markerCache[aqi] ?? BitmapDescriptor.defaultMarker;
-
-    markers.add(
-      Marker(
-        markerId: MarkerId(station["station_id"].toString()),
-        position: LatLng(lat, lon),
-        icon: markerIcon,
-        // Don't set infoWindow since we're using custom info window
-      ),
-    );
-  }
-
-  return markers;
 }
