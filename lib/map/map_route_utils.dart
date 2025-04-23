@@ -138,14 +138,22 @@ double findDistanceAlongRoute(Map<String, dynamic> params) {
   double bestPerpDistance = double.infinity;
   double bestCumulativeDistance = 0.0;
   double cumulativeDistance = 0.0;
+  double totalRouteDistance = 0.0;
 
+  // First calculate total route distance
+  for (int i = 0; i < routePoints.length - 1; i++) {
+    LatLng a = routePoints[i];
+    LatLng b = routePoints[i + 1];
+    totalRouteDistance +=
+        haversine(a.latitude, a.longitude, b.latitude, b.longitude);
+  }
+
+  // Then find where the user is along this route
   for (int i = 0; i < routePoints.length - 1; i++) {
     LatLng a = routePoints[i];
     LatLng b = routePoints[i + 1];
     double segmentLength =
         haversine(a.latitude, a.longitude, b.latitude, b.longitude);
-    double proj = calculateSegmentProgress(userLocation, a, b);
-    double projectedDistance = segmentLength * proj;
 
     double perpDistance = distanceToSegment(
       userLocation.latitude,
@@ -158,12 +166,19 @@ double findDistanceAlongRoute(Map<String, dynamic> params) {
 
     if (perpDistance < bestPerpDistance) {
       bestPerpDistance = perpDistance;
+
+      // Calculate how far along this segment the user is
+      double proj = calculateSegmentProgress(userLocation, a, b);
+      double projectedDistance = segmentLength * proj;
+
       bestCumulativeDistance = cumulativeDistance + projectedDistance;
     }
+
     cumulativeDistance += segmentLength;
   }
 
-  return bestCumulativeDistance;
+  // Ensure we don't return a value greater than the total route distance
+  return math.min(bestCumulativeDistance, totalRouteDistance);
 }
 
 Color getAQIColor(int aqi) {

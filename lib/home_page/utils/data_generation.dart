@@ -25,8 +25,7 @@ Future<void> getAQIPredictionData({
       baseUrl = await networkService.getEffectiveBaseUrl();
     } else {
       // Fallback to a default URL
-      baseUrl =
-          'https://41b9-2001-fb1-17b-c4a7-b936-64c4-c08e-8d05.ngrok-free.app';
+      baseUrl = 'https://mysecuremap.ngrok.dev';
     }
 
     final Uri url = Uri.parse('$baseUrl/api/aqi-prediction');

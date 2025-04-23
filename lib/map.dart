@@ -71,8 +71,7 @@ class _MapPageState extends State<MapPage> {
   int _selectedRouteIndex = 0;
 
   String? _userId;
-  final String baseUrl =
-      "https://41b9-2001-fb1-17b-c4a7-b936-64c4-c08e-8d05.ngrok-free.app";
+  final String baseUrl = "https://mysecuremap.ngrok.dev";
 
   Map<int, double> _routeSafetyScores = {};
   int? _safestRouteIndex;
@@ -111,10 +110,13 @@ class _MapPageState extends State<MapPage> {
   // Add this field for AQI predictions
   List<Map<String, dynamic>> _predictions = [];
 
+  // Add this field to the _MapPageState class
+  int _routeProgress = 0; // Store the current route progress percentage
+
   @override
   void initState() {
     super.initState();
-    _initializeUserLocationIcon();
+    // Remove call to _initializeUserLocationIcon() as we don't need it anymore
     _loadUserId();
 
     // Only initialize Android notifications safely
@@ -346,17 +348,10 @@ class _MapPageState extends State<MapPage> {
     _markersUpdateTimer = Timer(const Duration(milliseconds: 100), () async {
       Set<Marker> newMarkers = {};
 
-      if (_currentLocation != null) {
-        newMarkers.add(
-          Marker(
-            markerId: const MarkerId('user'),
-            position: _currentLocation!,
-            icon: _userLocationIcon ??
-                BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
-          ),
-        );
-      }
+      // Remove the custom user marker - we'll use the built-in Google Maps location marker
+      // The built-in marker is enabled with myLocationEnabled: true
 
+      // Keep adding station markers as before
       List<Map<String, dynamic>> visibleStations = _allStations;
       if (_activeStationIds.isNotEmpty) {
         visibleStations = _allStations
@@ -837,32 +832,47 @@ class _MapPageState extends State<MapPage> {
       }
     }
 
+    // Calculate user's progress along the route more accurately
+    double progressDistance = 0.0;
+
+    // If we have route points for the selected route, calculate the user's position along it
+    if (_routePolylines.containsKey(_userSelectedRouteIndex)) {
+      progressDistance = findDistanceAlongRoute({
+        'userLocation': _currentLocation!,
+        'routePoints': _routePolylines[_userSelectedRouteIndex]!,
+      });
+    } else if (nearestCalculation != null) {
+      // Fallback if route points aren't available
+      progressDistance = nearestCalculation.startDistance;
+    }
+
+    final totalRouteDistance = _getTotalRouteDistance();
+
+    // Calculate percentage and ensure it's between 0 and 100
+    int progressPercent = 0;
+    if (totalRouteDistance > 0) {
+      progressPercent = ((progressDistance / totalRouteDistance) * 100).round();
+      // Clamp value between 0 and 100
+      progressPercent = progressPercent.clamp(0, 100);
+    }
+
     if (mounted) {
-      // Update UI
       setState(() {
         _nearestStationName = nearestStation;
+        // Update the class field to store progress
+        _routeProgress = progressPercent;
       });
 
       // Show notifications only on Android if enabled
-      if (_showNotification &&
-          nearestCalculation != null &&
-          nearestStation != null) {
-        final totalRouteDistance = _getTotalRouteDistance();
-        if (totalRouteDistance > 0) {
-          int progressPercent =
-              ((nearestCalculation.endDistance / totalRouteDistance) * 100)
-                  .round();
-
-          // Only show Android system notifications with new time and distance info
-          if (Platform.isAndroid) {
-            AndroidNotificationService.showRouteProgressNotification(
-              nearestStationName: nearestStation,
-              progressPercent: progressPercent,
-              aqi: nearestStationAqi,
-              timeToWorstZone: timeToWorstZone,
-              distanceToWorstZone: distanceToWorstZone,
-            );
-          }
+      if (_showNotification && nearestStation != null) {
+        if (Platform.isAndroid) {
+          AndroidNotificationService.showRouteProgressNotification(
+            nearestStationName: nearestStation,
+            progressPercent: progressPercent,
+            aqi: nearestStationAqi,
+            timeToWorstZone: timeToWorstZone,
+            distanceToWorstZone: distanceToWorstZone,
+          );
         }
       }
     }
@@ -883,17 +893,16 @@ class _MapPageState extends State<MapPage> {
       double? lat = double.tryParse(station["lat"]?.toString() ?? "");
       double? lon = double.tryParse(station["lon"]?.toString() ?? "");
 
-      if (lat == null || lon == null) continue;
+      if (lat != null && lon != null) {
+        double distance =
+            haversine(userLocation.latitude, userLocation.longitude, lat, lon);
 
-      double distance =
-          haversine(userLocation.latitude, userLocation.longitude, lat, lon);
-
-      if (distance < minDistance) {
-        minDistance = distance;
-        nearestStation = station['station_name'];
+        if (distance < minDistance) {
+          minDistance = distance;
+          nearestStation = station['station_name'];
+        }
       }
     }
-
     return nearestStation;
   }
 
@@ -984,7 +993,7 @@ class _MapPageState extends State<MapPage> {
                                       color: Provider.of<ThemeProvider>(context,
                                                   listen: false)
                                               .isDarkMode
-                                          ? Colors.black12
+                                          ? Colors.black
                                           : Colors.grey[100],
                                       borderRadius: BorderRadius.circular(8),
                                       border: Border.all(
@@ -1053,7 +1062,7 @@ class _MapPageState extends State<MapPage> {
                                       color: Provider.of<ThemeProvider>(context,
                                                   listen: false)
                                               .isDarkMode
-                                          ? Colors.black12
+                                          ? Colors.black
                                           : Colors.grey[100],
                                       borderRadius: BorderRadius.circular(8),
                                       border: Border.all(
@@ -1166,7 +1175,6 @@ class _MapPageState extends State<MapPage> {
 
     // Assume average speed of 30 km/h (urban environment)
     const double averageSpeedKmh = 30.0;
-
     // Calculate time in hours
     double timeHours = remainingDistance / averageSpeedKmh;
 
@@ -1184,8 +1192,6 @@ class _MapPageState extends State<MapPage> {
     // Get arrival time and calculate prediction index based on travel hours
     final DateTime arrivalTime = _calculateEstimatedArrivalTime();
     final DateTime now = DateTime.now();
-
-    // Calculate hours difference with proper rounding (round up if minutes > 30, down otherwise)
     final Duration difference = arrivalTime.difference(now);
     int hoursFromNow = difference.inMinutes ~/ 60; // Integer division for hours
 
@@ -1314,7 +1320,6 @@ class _MapPageState extends State<MapPage> {
 
     // Create predictions for next 24 hours with slight variations
     _predictions = [];
-
     final random = math.Random();
     final now = DateTime.now();
 
@@ -1356,8 +1361,10 @@ class _MapPageState extends State<MapPage> {
         actions: [
           Row(
             children: [
-              Icon(isDarkMode ? Icons.nightlight_round : Icons.wb_sunny,
-                  color: isDarkMode ? Colors.white : Colors.black),
+              Icon(
+                isDarkMode ? Icons.nightlight_round : Icons.wb_sunny,
+                color: isDarkMode ? Colors.white : Colors.black,
+              ),
               Switch(
                 value: isDarkMode,
                 onChanged: (bool value) {
@@ -1567,6 +1574,8 @@ class _MapPageState extends State<MapPage> {
                     estimatedArrivalTime: _calculateEstimatedArrivalTime(),
                     // Add predicted AQI
                     predictedDestinationAqi: _predictDestinationAQI(),
+                    // Add the current progress percentage
+                    currentProgress: _routeProgress,
                   )
                 : const SizedBox.shrink(),
           ),

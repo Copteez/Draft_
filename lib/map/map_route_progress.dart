@@ -8,10 +8,10 @@ class RouteProgressDisplay extends StatefulWidget {
   final double totalRouteDistance;
   final bool isDarkMode;
   final Function()? onClose;
-  // Add estimated arrival time parameter
   final DateTime? estimatedArrivalTime;
-  // Add predicted AQI at destination
   final int? predictedDestinationAqi;
+  // Add new parameter for current progress
+  final int currentProgress;
 
   const RouteProgressDisplay({
     Key? key,
@@ -22,6 +22,7 @@ class RouteProgressDisplay extends StatefulWidget {
     this.onClose,
     this.estimatedArrivalTime,
     this.predictedDestinationAqi,
+    this.currentProgress = 0, // Default to 0 if not provided
   }) : super(key: key);
 
   @override
@@ -347,7 +348,8 @@ class _RouteProgressDisplayState extends State<RouteProgressDisplay>
         // Route progress bar
         const SizedBox(height: 12),
         LinearProgressIndicator(
-          value: _calculateRouteProgress(),
+          value: widget.currentProgress /
+              100.0, // Convert percentage to 0.0-1.0 value
           backgroundColor:
               widget.isDarkMode ? Colors.grey[800] : Colors.grey[300],
           valueColor: AlwaysStoppedAnimation<Color>(
@@ -356,7 +358,7 @@ class _RouteProgressDisplayState extends State<RouteProgressDisplay>
         ),
         const SizedBox(height: 8),
         Text(
-          '${(_calculateRouteProgress() * 100).toInt()}% of route completed',
+          '${widget.currentProgress}% of route completed',
           style: TextStyle(
             fontSize: 12,
             color: subtitleColor,
@@ -460,20 +462,8 @@ class _RouteProgressDisplayState extends State<RouteProgressDisplay>
   }
 
   double _calculateRouteProgress() {
-    if (widget.nearestStationName == null || widget.totalRouteDistance <= 0) {
-      return 0.0;
-    }
-
-    // Find current station
-    final currentStation = widget.stations.firstWhere(
-      (s) => s.stationName == widget.nearestStationName,
-      orElse: () => widget.stations.first,
-    );
-
-    // Calculate progress based on user's position (station's start distance)
-    // instead of station's end distance
-    return (currentStation.startDistance / widget.totalRouteDistance)
-        .clamp(0.0, 1.0);
+    // Use the currentProgress directly as a percentage between 0-100
+    return widget.currentProgress / 100.0;
   }
 
   // Format arrival time in a user-friendly way
