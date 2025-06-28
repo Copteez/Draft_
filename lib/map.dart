@@ -118,6 +118,7 @@ class _MapPageState extends State<MapPage> {
     super.initState();
     // Remove call to _initializeUserLocationIcon() as we don't need it anymore
     _loadUserId();
+    _loadFavoriteRoutes();
 
     // Only initialize Android notifications safely
     try {
@@ -526,7 +527,10 @@ class _MapPageState extends State<MapPage> {
   // Update the method to save route history to server
   Future<void> _saveRouteToHistory(LatLng origin, LatLng destination) async {
     // Check if user is logged in by verifying userId
-    if (_userId == null) {
+    final prefs = await SharedPreferences.getInstance();
+    final userId = prefs.getInt('user_id');
+
+    if (userId == null) {
       print("User not logged in. Route history not saved.");
       return;
     }
@@ -572,7 +576,7 @@ class _MapPageState extends State<MapPage> {
 
       // Prepare request body according to server's expected format
       final Map<String, dynamic> requestBody = {
-        "user_id": int.parse(_userId!),
+        "user_id": userId, // Use the integer directly from SharedPreferences
         "start_location": originName,
         "end_location": destinationName,
         "start_lat": origin.latitude,
@@ -726,6 +730,7 @@ class _MapPageState extends State<MapPage> {
 
     _updateMarkers();
     _startLocationUpdates();
+    _checkIfCurrentRouteIsFavorite();
   }
 
   void _updateMarkers() {
@@ -1337,6 +1342,385 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
+  // Add variables to store favorite routes
+  List<Map<String, dynamic>> _favoriteRoutes = [];
+  bool _isCurrentRouteFavorite = false;
+
+  // Load favorite routes from SharedPreferences
+  Future<void> _loadFavoriteRoutes() async {
+    // First load from SharedPreferences as a fallback/cache
+    final prefs = await SharedPreferences.getInstance();
+    final String? favoritesJson = prefs.getString('favorite_routes');
+
+    if (favoritesJson != null) {
+      setState(() {
+        _favoriteRoutes =
+            List<Map<String, dynamic>>.from(jsonDecode(favoritesJson) as List);
+      });
+    }
+
+    // Only proceed with server fetch if user is logged in
+    if (_userId == null) return;
+
+    try {
+      // Retrieve favorite paths from server
+      final response = await http.get(
+        Uri.parse("$baseUrl/api/favorite-paths?user_id=$_userId"),
+        headers: {"Content-Type": "application/json"},
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data["success"] == true && data.containsKey("favorite_paths")) {
+          // Transform server data format to our local format
+          List<Map<String, dynamic>> serverFavorites = [];
+
+          for (var path in data["favorite_paths"]) {
+            // Extract lat/lon from start_lat_lon and end_lat_lon strings
+            List<String> startLatLon =
+                path["start_lat_lon"].toString().split(",");
+            List<String> endLatLon = path["end_lat_lon"].toString().split(",");
+
+            if (startLatLon.length == 2 && endLatLon.length == 2) {
+              double startLat = double.tryParse(startLatLon[0].trim()) ?? 0;
+              double startLon = double.tryParse(startLatLon[1].trim()) ?? 0;
+              double endLat = double.tryParse(endLatLon[0].trim()) ?? 0;
+              double endLon = double.tryParse(endLatLon[1].trim()) ?? 0;
+
+              serverFavorites.add({
+                'id': "${startLat},${startLon}-${endLat},${endLon}",
+                'name': 'Route to ${path["end_location"]}',
+                'origin': {'lat': startLat, 'lon': startLon},
+                'destination': {'lat': endLat, 'lon': endLon},
+                'date': DateTime.now().toIso8601String(),
+                'path_id':
+                    path["path_id"], // Keep server's path_id for deletion
+              });
+            }
+          }
+
+          // Update state with server data
+          if (mounted) {
+            setState(() {
+              _favoriteRoutes = serverFavorites;
+            });
+
+            // Save back to SharedPreferences
+            await prefs.setString(
+                'favorite_routes', jsonEncode(serverFavorites));
+          }
+        }
+      } else {
+        print("Failed to fetch favorite routes: ${response.statusCode}");
+      }
+    } catch (e) {
+      print("Error fetching favorite routes: $e");
+    }
+
+    // Check if current route is a favorite
+    _checkIfCurrentRouteIsFavorite();
+  }
+
+  // Save favorite routes to SharedPreferences
+  Future<void> _saveFavoriteRoutes() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('favorite_routes', jsonEncode(_favoriteRoutes));
+  }
+
+  // Fix the _toggleFavoriteRoute method to correctly handle favorite routes and preserve location names
+  Future<void> _toggleFavoriteRoute() async {
+    // First check if we have route options and valid user ID
+    if (_routeOptions.isEmpty || _userSelectedRouteIndex < 0) {
+      print("Cannot save favorite: No active route");
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final userId = prefs.getInt('user_id');
+
+    if (userId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please log in to save favorites")),
+      );
+      return;
+    }
+
+    final selectedRoute = _routeOptions.firstWhere(
+      (option) => option.routeIndex == _userSelectedRouteIndex,
+      orElse: () => _routeOptions[0],
+    );
+
+    // Get origin and destination data
+    if (_currentLocation == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Current location not available")),
+      );
+      return;
+    }
+
+    // For destination, use the last point in the route polyline
+    LatLng? destinationLocation;
+    if (_routePolylines.containsKey(_userSelectedRouteIndex)) {
+      final points = _routePolylines[_userSelectedRouteIndex]!;
+      if (points.isNotEmpty) {
+        destinationLocation = points.last;
+      }
+    }
+
+    if (destinationLocation == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Destination location not available")),
+      );
+      return;
+    }
+
+    // Get location names - preserve names from search if available
+    String startLocationName = "Your Location";
+    String endLocationName = "Destination";
+
+    try {
+      // First check if we have names from calculations for the destination
+      if (selectedRoute.calculations.isNotEmpty) {
+        endLocationName = selectedRoute.calculations.last.stationName;
+      }
+
+      // Get more detailed start location name from geocoding
+      if (_currentLocation != null) {
+        try {
+          List<Placemark> placemarks = await placemarkFromCoordinates(
+              _currentLocation!.latitude, _currentLocation!.longitude);
+          if (placemarks.isNotEmpty) {
+            Placemark place = placemarks.first;
+
+            // Create a more descriptive address from the placemark components
+            List<String> addressParts = [];
+
+            if (place.thoroughfare?.isNotEmpty ?? false) {
+              addressParts.add(place.thoroughfare!);
+            }
+
+            if (place.subLocality?.isNotEmpty ?? false) {
+              addressParts.add(place.subLocality!);
+            } else if (place.locality?.isNotEmpty ?? false) {
+              addressParts.add(place.locality!);
+            }
+
+            if (place.administrativeArea?.isNotEmpty ?? false) {
+              addressParts.add(place.administrativeArea!);
+            }
+
+            if (addressParts.isNotEmpty) {
+              startLocationName = addressParts.join(", ");
+            } else if (place.name?.isNotEmpty ?? false) {
+              startLocationName = place.name!;
+            }
+          }
+        } catch (e) {
+          print("Error getting start location name: $e");
+        }
+      }
+
+      // Try to get a more descriptive destination name if it's still generic
+      if (endLocationName == "Destination" && destinationLocation != null) {
+        try {
+          List<Placemark> placemarks = await placemarkFromCoordinates(
+              destinationLocation.latitude, destinationLocation.longitude);
+          if (placemarks.isNotEmpty) {
+            Placemark place = placemarks.first;
+
+            // Create a detailed address for destination
+            List<String> addressParts = [];
+
+            if (place.thoroughfare?.isNotEmpty ?? false) {
+              addressParts.add(place.thoroughfare!);
+            }
+
+            if (place.subLocality?.isNotEmpty ?? false) {
+              addressParts.add(place.subLocality!);
+            } else if (place.locality?.isNotEmpty ?? false) {
+              addressParts.add(place.locality!);
+            }
+
+            if (place.administrativeArea?.isNotEmpty ?? false) {
+              addressParts.add(place.administrativeArea!);
+            }
+
+            if (addressParts.isNotEmpty) {
+              endLocationName = addressParts.join(", ");
+            } else if (place.name?.isNotEmpty ?? false) {
+              endLocationName = place.name!;
+            }
+          }
+        } catch (e) {
+          print("Error getting destination location name: $e");
+        }
+      }
+    } catch (e) {
+      print("Error preparing location names: $e");
+    }
+
+    try {
+      // Check if we're adding or removing from favorites
+      final existingPathId = await _checkIfCurrentRouteIsFavoriteAndGetPathId();
+      final isCurrentlyFavorite = existingPathId != null;
+
+      if (isCurrentlyFavorite) {
+        // Delete existing favorite
+        final response = await http.delete(
+          Uri.parse("$baseUrl/api/favorite-paths"),
+          headers: {"Content-Type": "application/json"},
+          body: jsonEncode({
+            "user_id": userId,
+            "path_id": existingPathId,
+          }),
+        );
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          if (data["success"] == true) {
+            setState(() {
+              _isCurrentRouteFavorite = false;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("Removed from favorites")),
+            );
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                  content:
+                      Text(data["error"] ?? "Failed to remove from favorites")),
+            );
+          }
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Network error removing favorite")),
+          );
+        }
+      } else {
+        // Add as new favorite
+        final response = await http.post(
+          Uri.parse("$baseUrl/api/favorite-paths"),
+          headers: {"Content-Type": "application/json"},
+          body: jsonEncode({
+            "user_id": userId,
+            "start_location": startLocationName,
+            "start_lat": _currentLocation!.latitude,
+            "start_lon": _currentLocation!.longitude,
+            "end_location": endLocationName,
+            "end_lat": destinationLocation.latitude,
+            "end_lon": destinationLocation.longitude,
+          }),
+        );
+
+        if (response.statusCode == 201) {
+          final data = jsonDecode(response.body);
+          if (data["success"] == true) {
+            setState(() {
+              _isCurrentRouteFavorite = true;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("Added to favorites")),
+            );
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                  content: Text(data["error"] ?? "Failed to add to favorites")),
+            );
+          }
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Network error adding favorite")),
+          );
+        }
+      }
+
+      // Refresh favorite routes list
+      await _loadFavoriteRoutes();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error: $e")),
+      );
+    }
+  }
+
+  // Add helper method to check if current route is favorite and return path_id
+  Future<int?> _checkIfCurrentRouteIsFavoriteAndGetPathId() async {
+    if (_currentLocation == null || _routeOptions.isEmpty) {
+      return null;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final userId = prefs.getInt('user_id');
+    if (userId == null) return null;
+
+    try {
+      final response = await http.get(
+        Uri.parse("$baseUrl/api/favorite-paths?user_id=$userId"),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data["success"] == true && data["favorite_paths"] != null) {
+          // Get destination coordinates from current route
+          LatLng? destination;
+          if (_routePolylines.containsKey(_userSelectedRouteIndex)) {
+            final points = _routePolylines[_userSelectedRouteIndex]!;
+            if (points.isNotEmpty) {
+              destination = points.last;
+            }
+          }
+
+          if (destination == null) return null;
+
+          // Check each favorite path for a match
+          for (var path in data["favorite_paths"]) {
+            // Extract coordinates
+            String startLatLon = path["start_lat_lon"] ?? "0,0";
+            List<String> startParts = startLatLon.split(",");
+            double startLat = double.tryParse(startParts[0]) ?? 0;
+            double startLon =
+                startParts.length > 1 ? double.tryParse(startParts[1]) ?? 0 : 0;
+
+            String endLatLon = path["end_lat_lon"] ?? "0,0";
+            List<String> endParts = endLatLon.split(",");
+            double endLat = double.tryParse(endParts[0]) ?? 0;
+            double endLon =
+                endParts.length > 1 ? double.tryParse(endParts[1]) ?? 0 : 0;
+
+            // Check if coordinates are close enough (within ~100m)
+            const double threshold = 0.001; // Approximately 100m
+            if ((startLat - _currentLocation!.latitude).abs() < threshold &&
+                (startLon - _currentLocation!.longitude).abs() < threshold &&
+                (endLat - destination.latitude).abs() < threshold &&
+                (endLon - destination.longitude).abs() < threshold) {
+              setState(() {
+                _isCurrentRouteFavorite = true;
+              });
+
+              return path["path_id"];
+            }
+          }
+        }
+      }
+    } catch (e) {
+      print("Error checking if route is favorite: $e");
+    }
+
+    setState(() {
+      _isCurrentRouteFavorite = false;
+    });
+
+    return null;
+  }
+
+  // Update _checkIfCurrentRouteIsFavorite to use the new helper method
+  void _checkIfCurrentRouteIsFavorite() async {
+    final pathId = await _checkIfCurrentRouteIsFavoriteAndGetPathId();
+    setState(() {
+      _isCurrentRouteFavorite = pathId != null;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     // Get the current theme from provider
@@ -1576,6 +1960,9 @@ class _MapPageState extends State<MapPage> {
                     predictedDestinationAqi: _predictDestinationAQI(),
                     // Add the current progress percentage
                     currentProgress: _routeProgress,
+                    // Add these new properties
+                    isFavorite: _isCurrentRouteFavorite,
+                    onToggleFavorite: _toggleFavoriteRoute,
                   )
                 : const SizedBox.shrink(),
           ),

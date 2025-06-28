@@ -10,8 +10,10 @@ class RouteProgressDisplay extends StatefulWidget {
   final Function()? onClose;
   final DateTime? estimatedArrivalTime;
   final int? predictedDestinationAqi;
-  // Add new parameter for current progress
   final int currentProgress;
+  // Add new properties for favorites
+  final bool isFavorite;
+  final Function()? onToggleFavorite;
 
   const RouteProgressDisplay({
     Key? key,
@@ -22,7 +24,9 @@ class RouteProgressDisplay extends StatefulWidget {
     this.onClose,
     this.estimatedArrivalTime,
     this.predictedDestinationAqi,
-    this.currentProgress = 0, // Default to 0 if not provided
+    this.currentProgress = 0,
+    this.isFavorite = false,
+    this.onToggleFavorite,
   }) : super(key: key);
 
   @override
@@ -116,6 +120,7 @@ class _RouteProgressDisplayState extends State<RouteProgressDisplay>
                   ),
                   Row(
                     children: [
+                      // Remove star button from here
                       IconButton(
                         icon: Icon(
                           _isExpanded
@@ -127,7 +132,7 @@ class _RouteProgressDisplayState extends State<RouteProgressDisplay>
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
                       ),
-                      const SizedBox(width: 16),
+                      const SizedBox(width: 8),
                       if (widget.onClose != null)
                         IconButton(
                           icon: Icon(Icons.close, color: textColor),
@@ -206,6 +211,60 @@ class _RouteProgressDisplayState extends State<RouteProgressDisplay>
                   ),
                 ),
               ),
+
+            // Add Favorite Button Section - NEW SECTION
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: InkWell(
+                onTap: widget.onToggleFavorite,
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: widget.isDarkMode
+                        ? (widget.isFavorite
+                            ? Colors.amber.withOpacity(0.2)
+                            : Colors.blueGrey[800])
+                        : (widget.isFavorite
+                            ? Colors.amber.withOpacity(0.1)
+                            : Colors.grey[100]),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color:
+                          widget.isFavorite ? Colors.amber : Colors.transparent,
+                      width: widget.isFavorite ? 1 : 0,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        widget.isFavorite ? Icons.star : Icons.star_border,
+                        color: widget.isFavorite ? Colors.amber : Colors.grey,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        widget.isFavorite
+                            ? 'Saved to Favorites'
+                            : 'Save to Favorites',
+                        style: TextStyle(
+                          color: widget.isFavorite
+                              ? Colors.amber
+                              : (widget.isDarkMode
+                                  ? Colors.white70
+                                  : Colors.grey[700]),
+                          fontWeight: widget.isFavorite
+                              ? FontWeight.bold
+                              : FontWeight.normal,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
 
             // Expanded stations list
             SizeTransition(
