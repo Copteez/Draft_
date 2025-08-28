@@ -23,25 +23,27 @@ import 'map/map_location_service.dart';
 import 'map/map_ui_components.dart';
 import 'map/map_route_service.dart';
 import 'map/map_route_progress.dart';
-import 'map/map_route_bottom_sheet.dart';
+// ignore_for_file: unused_field, unused_element
 import 'map/map_android_notification.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'theme_provider.dart';
+import 'network_service.dart';
 
+// Primary Map screen widget
 class MapPage extends StatefulWidget {
   final AppConfig config;
   final double? initialLat;
   final double? initialLon;
   final String? locationName;
 
-  const MapPage({
-    Key? key,
-    required this.config,
-    this.initialLat,
-    this.initialLon,
-    this.locationName,
-  }) : super(key: key);
+  const MapPage(
+      {Key? key,
+      required this.config,
+      this.initialLat,
+      this.initialLon,
+      this.locationName})
+      : super(key: key);
 
   @override
   _MapPageState createState() => _MapPageState();
@@ -66,12 +68,16 @@ class _MapPageState extends State<MapPage> {
   Map<String, dynamic>? _selectedStationDetail;
   LatLng? _selectedMarkerLatLng;
   Offset? _infoWindowOffset;
+  // Track selected station favorite status
+  bool _selectedStationIsFavorite = false;
+  int? _selectedStationFavoriteId;
+  String? _selectedFavoriteSource; // 'location' or 'path'
 
   Map<int, List<LatLng>> _routePolylines = {};
   int _selectedRouteIndex = 0;
 
   String? _userId;
-  final String baseUrl = "https://mysecuremap.ngrok.dev";
+  late String baseUrl;
 
   Map<int, double> _routeSafetyScores = {};
   int? _safestRouteIndex;
@@ -133,10 +139,12 @@ class _MapPageState extends State<MapPage> {
       print("Error initializing notifications: $e");
     }
 
-    Future.wait([
-      _initializeUserAndLocation(),
-      _fetchSources(),
-    ]).then((_) {
+    _initializeBaseUrl().then((_) {
+      return Future.wait([
+        _initializeUserAndLocation(),
+        _fetchSources(),
+      ]);
+    }).then((_) {
       _fetchAllAQIStations();
       if (_mapController != null && _currentLocation != null) {
         _mapController!.animateCamera(
@@ -149,6 +157,18 @@ class _MapPageState extends State<MapPage> {
       const Duration(minutes: 1),
       (_) => _updateNearestStation(),
     );
+  }
+
+  Future<void> _initializeBaseUrl() async {
+    try {
+      final network = NetworkService(config: widget.config);
+      baseUrl = await network.getEffectiveBaseUrl();
+    } catch (_) {
+      // As a last resort, use zerotier or ngrok from config without calling
+      baseUrl = widget.config.ngrok.isNotEmpty
+          ? widget.config.ngrok
+          : widget.config.zerotier;
+    }
   }
 
   @override
@@ -283,8 +303,8 @@ class _MapPageState extends State<MapPage> {
       final response = await http.get(Uri.parse(url));
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        if (data["success"] == true) {
-          List<dynamic> src = data["sources"];
+        if (data["success"] == true && data["sources"] is List) {
+          final src = List<dynamic>.from(data["sources"]);
           setState(() {
             _sources = ["All"] + src.map((e) => e.toString()).toList();
           });
@@ -381,11 +401,15 @@ class _MapPageState extends State<MapPage> {
             markerId: MarkerId(station["station_id"].toString()),
             position: LatLng(lat, lon),
             icon: markerIcon,
-            onTap: () {
+            onTap: () async {
               setState(() {
                 _selectedStationDetail = station;
                 _selectedMarkerLatLng = LatLng(lat, lon);
+                _selectedStationIsFavorite = false;
+                _selectedStationFavoriteId = null;
+                _selectedFavoriteSource = null;
               });
+              await _refreshSelectedStationFavoriteState();
             },
           ),
         );
@@ -398,6 +422,116 @@ class _MapPageState extends State<MapPage> {
         });
       }
     });
+  }
+
+  Future<void> _refreshSelectedStationFavoriteState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final userId = prefs.getInt('user_id');
+      if (userId == null || _selectedStationDetail == null) return;
+
+      final lat =
+          double.tryParse(_selectedStationDetail!['lat']?.toString() ?? '');
+      final lon =
+          double.tryParse(_selectedStationDetail!['lon']?.toString() ?? '');
+      if (lat == null || lon == null) return;
+
+      // Try favorite-locations first
+      bool matched = false;
+      int? favId;
+      String? favSrc;
+      try {
+        final res = await http.get(
+          Uri.parse("$baseUrl/api/favorite-locations?user_id=$userId"),
+        );
+        if (res.statusCode == 200) {
+          final data = jsonDecode(res.body);
+          List favs;
+          if (data is Map && data['favorite_locations'] is List) {
+            favs = List.from(data['favorite_locations']);
+          } else if (data is List) {
+            favs = data;
+          } else {
+            favs = [];
+          }
+          const double threshold = 0.0009; // ~100m
+          for (final f in favs) {
+            double? fLat = double.tryParse(
+                f['latitude']?.toString() ?? f['lat']?.toString() ?? '');
+            double? fLon = double.tryParse(
+                f['longitude']?.toString() ?? f['lon']?.toString() ?? '');
+            if ((fLat == null || fLon == null) && f['lat_lon'] != null) {
+              final parts = f['lat_lon'].toString().split(',');
+              if (parts.length >= 2) {
+                fLat = double.tryParse(parts[0].trim());
+                fLon = double.tryParse(parts[1].trim());
+              }
+            }
+            if (fLat == null || fLon == null) continue;
+            if ((fLat - lat).abs() < threshold &&
+                (fLon - lon).abs() < threshold) {
+              matched = true;
+              favId = (f['location_id'] ?? f['id']) is int
+                  ? (f['location_id'] ?? f['id'])
+                  : int.tryParse(
+                      (f['location_id'] ?? f['id'])?.toString() ?? '');
+              favSrc = 'location';
+              break;
+            }
+          }
+        }
+      } catch (_) {
+        // ignore
+      }
+
+      if (!matched) {
+        // Fallback: check favorite-paths (match start_lat_lon or start_lat/start_lon)
+        try {
+          final res = await http.get(
+            Uri.parse("$baseUrl/api/favorite-paths?user_id=$userId"),
+          );
+          if (res.statusCode == 200) {
+            final data = jsonDecode(res.body);
+            final paths = (data is Map && data['favorite_paths'] is List)
+                ? List.from(data['favorite_paths'])
+                : <dynamic>[];
+            const double threshold = 0.0009; // ~100m
+            for (final p in paths) {
+              double? pLat = double.tryParse(p['start_lat']?.toString() ?? '');
+              double? pLon = double.tryParse(p['start_lon']?.toString() ?? '');
+              if ((pLat == null || pLon == null) &&
+                  p['start_lat_lon'] != null) {
+                final parts = p['start_lat_lon'].toString().split(',');
+                if (parts.length >= 2) {
+                  pLat = double.tryParse(parts[0].trim());
+                  pLon = double.tryParse(parts[1].trim());
+                }
+              }
+              if (pLat == null || pLon == null) continue;
+              if ((pLat - lat).abs() < threshold &&
+                  (pLon - lon).abs() < threshold) {
+                matched = true;
+                favId = (p['path_id'] is int)
+                    ? p['path_id']
+                    : int.tryParse(p['path_id']?.toString() ?? '');
+                favSrc = 'path';
+                break;
+              }
+            }
+          }
+        } catch (_) {
+          // ignore
+        }
+      }
+
+      setState(() {
+        _selectedStationIsFavorite = matched;
+        _selectedStationFavoriteId = favId;
+        _selectedFavoriteSource = favSrc;
+      });
+    } catch (e) {
+      // ignore transient errors
+    }
   }
 
   Future<void> _loadRoute(
@@ -436,9 +570,27 @@ class _MapPageState extends State<MapPage> {
           for (int r = 0; r < routeCount; r++) {
             final overview = routes[r]['overview_polyline']['points'];
             List<LatLng> rawPoints = await decodePolyAsync(overview);
+            // 1) Simplify to reduce point count, then 2) smooth with lower density
+            final simplified =
+                simplifyByDistance(rawPoints, minDistanceMeters: 40);
             List<LatLng> points =
-                smoothPolyline(rawPoints, numPointsPerSegment: 10);
+                smoothPolyline(simplified, numPointsPerSegment: 4);
             _routePolylines[r] = points;
+
+            // Draw a temporary polyline immediately for quick feedback
+            final tempId = "temp_${r}";
+            _allPolylines[tempId] = Polyline(
+              polylineId: PolylineId(tempId),
+              points: points,
+              color: Colors.blue.withOpacity(r == 0 ? 0.9 : 0.4),
+              width: 5,
+            );
+            if (mounted) {
+              setState(() {
+                polylines = Map.fromEntries(_allPolylines.entries
+                    .map((e) => MapEntry(PolylineId(e.key), e.value)));
+              });
+            }
 
             _routeSafetyScores[r] =
                 calculateRouteSafetyScore(points, _allStations);
@@ -477,6 +629,9 @@ class _MapPageState extends State<MapPage> {
             _activeStationIds.add(calc.stationName);
           }
 
+          // Remove temporary polylines now that segmented ones are ready
+          _allPolylines.removeWhere((k, v) => k.startsWith('temp_'));
+
           setState(() {
             _selectedRouteIndex = bestRouteIndex;
             _userSelectedRouteIndex = bestRouteIndex;
@@ -489,6 +644,8 @@ class _MapPageState extends State<MapPage> {
                           routeIndex == bestRouteIndex ? 1.0 : 0.3)));
             }));
             _isRoutePlotting = false;
+            // Show route details panel immediately
+            _showRouteProgress = true;
           });
 
           _updateMarkers();
@@ -500,9 +657,13 @@ class _MapPageState extends State<MapPage> {
           }
 
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              _scaffoldKey.currentState?.openEndDrawer();
-            }
+            if (!mounted) return;
+            // Small delay to ensure the drawer animation is smooth
+            Future.delayed(const Duration(milliseconds: 120), () {
+              if (mounted) {
+                _scaffoldKey.currentState?.openEndDrawer();
+              }
+            });
           });
 
           // After route is loaded successfully, fetch predictions for destination
@@ -520,91 +681,35 @@ class _MapPageState extends State<MapPage> {
         _isRouteLoading = false;
         _isRoutePlotting = false;
       });
-      await _fetchAllAQIStations();
+      // Avoid redundant station fetch here; stations were loaded before routing
     }
   }
 
   // Update the method to save route history to server
   Future<void> _saveRouteToHistory(LatLng origin, LatLng destination) async {
-    // Check if user is logged in by verifying userId
-    final prefs = await SharedPreferences.getInstance();
-    final userId = prefs.getInt('user_id');
-
-    if (userId == null) {
-      print("User not logged in. Route history not saved.");
-      return;
-    }
-
     try {
-      // Get location names for origin and destination
-      String originName = "Unknown location";
-      String destinationName = "Unknown location";
+      final prefs = await SharedPreferences.getInstance();
+      final userId = prefs.getInt('user_id');
+      if (userId == null) return;
 
-      // Try to get location name for origin
-      if (_currentLocation != null &&
-          origin.latitude == _currentLocation!.latitude &&
-          origin.longitude == _currentLocation!.longitude) {
-        originName = "Your Location";
-      } else {
-        try {
-          List<Placemark> placemarks =
-              await placemarkFromCoordinates(origin.latitude, origin.longitude);
-          if (placemarks.isNotEmpty) {
-            Placemark place = placemarks.first;
-            originName = place.street?.isNotEmpty == true
-                ? place.street!
-                : "${place.locality}, ${place.country}";
-          }
-        } catch (e) {
-          print("Error getting origin location name: $e");
-        }
-      }
+      final network = NetworkService(config: widget.config);
+      final base = await network.getEffectiveBaseUrl();
+      final url = Uri.parse("$base/api/history-search");
 
-      // Try to get location name for destination
-      try {
-        List<Placemark> placemarks = await placemarkFromCoordinates(
-            destination.latitude, destination.longitude);
-        if (placemarks.isNotEmpty) {
-          Placemark place = placemarks.first;
-          destinationName = place.street?.isNotEmpty == true
-              ? place.street!
-              : "${place.locality}, ${place.country}";
-        }
-      } catch (e) {
-        print("Error getting destination location name: $e");
-      }
-
-      // Prepare request body according to server's expected format
-      final Map<String, dynamic> requestBody = {
-        "user_id": userId, // Use the integer directly from SharedPreferences
-        "start_location": originName,
-        "end_location": destinationName,
+      final body = jsonEncode({
+        "user_id": userId,
+        "start_location": "Start",
         "start_lat": origin.latitude,
         "start_lon": origin.longitude,
+        "end_location": "End",
         "end_lat": destination.latitude,
-        "end_lon": destination.longitude
-      };
+        "end_lon": destination.longitude,
+      });
 
-      // Send POST request to server's history-search endpoint
-      final response = await http.post(
-        Uri.parse("$baseUrl/api/history-search"),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode(requestBody),
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data["success"] == true) {
-          print("Route history saved successfully.");
-        } else {
-          print("Failed to save route history: ${data['message']}");
-        }
-      } else {
-        print(
-            "Failed to save route history. Status code: ${response.statusCode}");
-      }
-    } catch (e) {
-      print("Error saving route history: $e");
+      await http.post(url,
+          headers: {"Content-Type": "application/json"}, body: body);
+    } catch (err) {
+      // ignore errors for history saving
     }
   }
 
@@ -616,20 +721,41 @@ class _MapPageState extends State<MapPage> {
       'segmentLength': SEGMENT_LENGTH,
     });
 
-    for (int i = 0; i < segments.length; i++) {
-      RouteSegment segment = segments[i];
-      String polylineId = "seg_${routeIndex}_$i";
-
-      Color segColor = segment.nearbyStations.isNotEmpty
+    // Merge consecutive segments with same color to reduce polyline count
+    List<LatLng> currentPoints = [];
+    Color? currentColor;
+    int mergedIndex = 0;
+    for (final segment in segments) {
+      final color = segment.nearbyStations.isNotEmpty
           ? getAQIColor(segment.nearbyStations.first['aqi'])
           : const Color(0xFF2D3250);
-
+      if (currentColor == null) {
+        currentColor = color;
+        currentPoints = List.from(segment.points);
+      } else if (color.value == currentColor.value) {
+        // Append but avoid duplicating the join point
+        currentPoints.addAll(segment.points.skip(1));
+      } else {
+        final polylineId = "seg_${routeIndex}_${mergedIndex++}";
+        _allPolylines[polylineId] = Polyline(
+          polylineId: PolylineId(polylineId),
+          points: currentPoints,
+          color: currentColor.withOpacity(opacity),
+          width: 5,
+          // Tap opens info for the last segment in this merged run
+          onTap: () => showSegmentInfo(context, segment),
+        );
+        currentColor = color;
+        currentPoints = List.from(segment.points);
+      }
+    }
+    if (currentPoints.isNotEmpty && currentColor != null) {
+      final polylineId = "seg_${routeIndex}_${mergedIndex++}";
       _allPolylines[polylineId] = Polyline(
         polylineId: PolylineId(polylineId),
-        points: segment.points,
-        color: segColor.withOpacity(opacity),
+        points: currentPoints,
+        color: currentColor.withOpacity(opacity),
         width: 5,
-        onTap: () => showSegmentInfo(context, segment),
       );
     }
   }
@@ -731,6 +857,33 @@ class _MapPageState extends State<MapPage> {
     _updateMarkers();
     _startLocationUpdates();
     _checkIfCurrentRouteIsFavorite();
+  }
+
+  // Close the route progress view, disable notifications, and clear the current route overlays/state
+  void _closeRouteAndClear() async {
+    setState(() {
+      _showRouteProgress = false;
+      // Disable alerts/notification
+      if (_showNotification) {
+        _showNotification = false;
+        if (Platform.isAndroid) {
+          AndroidNotificationService.hideRouteProgressNotification();
+        }
+      }
+      // Clear current route related state
+      polylines.clear();
+      _routePolylines.clear();
+      _allPolylines.clear();
+      _routeSafetyScores.clear();
+      _selectedRouteIndex = -1;
+      _userSelectedRouteIndex = -1;
+      _safestRouteIndex = null;
+      _isRoutePlotting = false;
+      _activeStationIds.clear();
+      _routeOptions = [];
+    });
+    // Reload all stations/markers without route filters
+    await _fetchAllAQIStations();
   }
 
   void _updateMarkers() {
@@ -1521,7 +1674,7 @@ class _MapPageState extends State<MapPage> {
       }
 
       // Try to get a more descriptive destination name if it's still generic
-      if (endLocationName == "Destination" && destinationLocation != null) {
+      if (endLocationName == "Destination") {
         try {
           List<Placemark> placemarks = await placemarkFromCoordinates(
               destinationLocation.latitude, destinationLocation.longitude);
@@ -1839,7 +1992,7 @@ class _MapPageState extends State<MapPage> {
             child: Padding(
               padding: const EdgeInsets.only(right: 16.0),
               child: FloatingOptions(
-                onRouteSearch: () {
+                onPathFinder: () {
                   _scaffoldKey.currentState?.openEndDrawer();
                 },
                 onFilter: _showFilterDialog,
@@ -1861,72 +2014,30 @@ class _MapPageState extends State<MapPage> {
                   });
                   await _fetchAllAQIStations();
                 },
+                onToggleProgress: () {
+                  setState(() {
+                    _showRouteProgress = !_showRouteProgress;
+                  });
+                },
+                onToggleAlerts: () {
+                  setState(() {
+                    _showNotification = !_showNotification;
+                    if (_showNotification) {
+                      _updateNearestStation();
+                    } else if (Platform.isAndroid) {
+                      AndroidNotificationService
+                          .hideRouteProgressNotification();
+                    }
+                  });
+                },
+                isProgressVisible: _showRouteProgress,
+                alertsEnabled: _showNotification,
+                hasActiveRoute:
+                    _routeOptions.isNotEmpty && _userSelectedRouteIndex >= 0,
                 isDarkMode: isDarkMode,
               ),
             ),
           ),
-          if (_routeOptions.isNotEmpty)
-            Positioned(
-              left: 16,
-              bottom: _showRouteProgress ? 150 : 30,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  FloatingActionButton.extended(
-                    onPressed: () {
-                      setState(() {
-                        _showRouteProgress = !_showRouteProgress;
-                      });
-                    },
-                    icon: Icon(
-                      _showRouteProgress
-                          ? Icons.visibility_off
-                          : Icons.visibility,
-                      color: isDarkMode ? Colors.white : Colors.black,
-                    ),
-                    label: Text(
-                      _showRouteProgress ? 'Hide Progress' : 'Show Progress',
-                      style: TextStyle(
-                        color: isDarkMode ? Colors.white : Colors.black,
-                      ),
-                    ),
-                    backgroundColor:
-                        isDarkMode ? const Color(0xFF2D3250) : Colors.white,
-                  ),
-                  const SizedBox(height: 8),
-                  FloatingActionButton.extended(
-                    onPressed: () {
-                      setState(() {
-                        _showNotification = !_showNotification;
-                        if (_showNotification) {
-                          _updateNearestStation();
-                        } else if (Platform.isAndroid) {
-                          AndroidNotificationService
-                              .hideRouteProgressNotification();
-                        }
-                      });
-                    },
-                    icon: Icon(
-                      _showNotification
-                          ? Icons.notifications_active
-                          : Icons.notifications_off,
-                      color: isDarkMode ? Colors.white : Colors.black,
-                    ),
-                    label: Text(
-                      _showNotification ? 'Disable Alerts' : 'Enable Alerts',
-                      style: TextStyle(
-                        color: isDarkMode ? Colors.white : Colors.black,
-                      ),
-                    ),
-                    backgroundColor: _showNotification
-                        ? (isDarkMode ? const Color(0xFF2D3250) : Colors.white)
-                        : Colors.grey,
-                    heroTag: 'notificationBtn',
-                  ),
-                ],
-              ),
-            ),
           AnimatedPositioned(
             duration: const Duration(milliseconds: 300),
             curve: Curves.easeInOut,
@@ -1935,7 +2046,9 @@ class _MapPageState extends State<MapPage> {
             bottom: _showRouteProgress &&
                     _routeOptions.isNotEmpty &&
                     _userSelectedRouteIndex >= 0
-                ? 0
+                ? (MediaQuery.of(context).padding.bottom > 0
+                    ? MediaQuery.of(context).padding.bottom
+                    : 16)
                 : -200,
             child: _routeOptions.isNotEmpty && _userSelectedRouteIndex >= 0
                 ? RouteProgressDisplay(
@@ -1949,11 +2062,7 @@ class _MapPageState extends State<MapPage> {
                     nearestStationName: _nearestStationName,
                     totalRouteDistance: _getTotalRouteDistance(),
                     isDarkMode: isDarkMode,
-                    onClose: () {
-                      setState(() {
-                        _showRouteProgress = false;
-                      });
-                    },
+                    onClose: _closeRouteAndClear,
                     // Add estimated arrival time
                     estimatedArrivalTime: _calculateEstimatedArrivalTime(),
                     // Add predicted AQI
@@ -1972,22 +2081,13 @@ class _MapPageState extends State<MapPage> {
               left: 0,
               right: 0,
               bottom: 0,
-              child: GestureDetector(
-                onTap: () {
-                  Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => DetailsPage(
-                              config: widget.config,
-                              station: _selectedStationDetail!)));
-                },
+              child: SafeArea(
+                top: false,
                 child: Container(
                   decoration: BoxDecoration(
                     color: isDarkMode ? const Color(0xFF2D3250) : Colors.white,
-                    // Remove any border here to prevent double borders
                   ),
-                  margin: EdgeInsets.zero, // Remove any margin
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
                   child: buildCustomInfoWindow(
                     _selectedStationDetail!,
                     isDarkMode,
@@ -1996,6 +2096,230 @@ class _MapPageState extends State<MapPage> {
                         _selectedStationDetail = null;
                       });
                     },
+                    onSaveFavorite: () async {
+                      final prefs = await SharedPreferences.getInstance();
+                      final userId = prefs.getInt('user_id');
+                      if (userId == null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                              content: Text('Please log in to save favorites')),
+                        );
+                        return;
+                      }
+
+                      try {
+                        final station = _selectedStationDetail!;
+                        final lat =
+                            double.tryParse(station['lat']?.toString() ?? '');
+                        final lon =
+                            double.tryParse(station['lon']?.toString() ?? '');
+                        if (lat == null || lon == null) return;
+
+                        if (_selectedStationIsFavorite &&
+                            _selectedStationFavoriteId != null) {
+                          // Remove favorite
+                          bool removed = false;
+                          // Prefer deleting from the source we stored
+                          if (_selectedFavoriteSource == 'path') {
+                            try {
+                              final del = await http.delete(
+                                Uri.parse("$baseUrl/api/favorite-paths"),
+                                headers: {"Content-Type": "application/json"},
+                                body: jsonEncode({
+                                  "user_id": userId,
+                                  "path_id": _selectedStationFavoriteId,
+                                }),
+                              );
+                              removed = del.statusCode == 200;
+                            } catch (_) {}
+                          } else {
+                            // default to location
+                            try {
+                              final res = await http.delete(
+                                Uri.parse("$baseUrl/api/favorite-locations"),
+                                headers: {"Content-Type": "application/json"},
+                                body: jsonEncode({
+                                  "user_id": userId,
+                                  // Server expects 'location_id'
+                                  "location_id": _selectedStationFavoriteId,
+                                }),
+                              );
+                              removed = res.statusCode == 200;
+                            } catch (_) {}
+                          }
+
+                          if (!removed) {
+                            // Fallback: try the other type based on coordinate matching
+                            try {
+                              // Find matching path_id
+                              int? pathId;
+                              final res = await http.get(
+                                Uri.parse(
+                                    "$baseUrl/api/favorite-paths?user_id=$userId"),
+                              );
+                              if (res.statusCode == 200) {
+                                final data = jsonDecode(res.body);
+                                final paths = (data is Map &&
+                                        data['favorite_paths'] is List)
+                                    ? List.from(data['favorite_paths'])
+                                    : <dynamic>[];
+                                const double threshold = 0.0009;
+                                for (final p in paths) {
+                                  double? pLat = double.tryParse(
+                                      p['start_lat']?.toString() ?? '');
+                                  double? pLon = double.tryParse(
+                                      p['start_lon']?.toString() ?? '');
+                                  if ((pLat == null || pLon == null) &&
+                                      p['start_lat_lon'] != null) {
+                                    final parts = p['start_lat_lon']
+                                        .toString()
+                                        .split(',');
+                                    if (parts.length >= 2) {
+                                      pLat = double.tryParse(parts[0].trim());
+                                      pLon = double.tryParse(parts[1].trim());
+                                    }
+                                  }
+                                  if (pLat == null || pLon == null) continue;
+                                  if ((pLat - lat).abs() < threshold &&
+                                      (pLon - lon).abs() < threshold) {
+                                    pathId = p['path_id'];
+                                    break;
+                                  }
+                                }
+                              }
+                              if (pathId != null) {
+                                final del = await http.delete(
+                                  Uri.parse("$baseUrl/api/favorite-paths"),
+                                  headers: {"Content-Type": "application/json"},
+                                  body: jsonEncode(
+                                      {"user_id": userId, "path_id": pathId}),
+                                );
+                                removed = del.statusCode == 200;
+                              }
+                            } catch (_) {}
+                          }
+
+                          if (removed) {
+                            setState(() {
+                              _selectedStationIsFavorite = false;
+                              _selectedStationFavoriteId = null;
+                            });
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content: Text('Removed from favorites')),
+                            );
+                          } else {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Remove failed')),
+                            );
+                          }
+                        } else {
+                          // Add favorite
+                          bool added = false;
+                          int? newFavId;
+                          // Try favorite-locations first
+                          try {
+                            final res = await http.post(
+                              Uri.parse("$baseUrl/api/favorite-locations"),
+                              headers: {"Content-Type": "application/json"},
+                              body: jsonEncode({
+                                "user_id": userId,
+                                "location_name": station['station_name'] ??
+                                    'Favorite Station',
+                                "latitude": lat,
+                                "longitude": lon,
+                              }),
+                            );
+                            if (res.statusCode == 201) {
+                              added = true;
+                              try {
+                                final body = jsonDecode(res.body);
+                                newFavId = body['location_id'] ??
+                                    body['favorite_id'] ??
+                                    body['id'];
+                              } catch (_) {}
+                              _selectedFavoriteSource = 'location';
+                            } else if (res.statusCode == 400) {
+                              // Possibly already exists; treat as success after refresh
+                              await _refreshSelectedStationFavoriteState();
+                              if (_selectedStationIsFavorite) {
+                                added = true;
+                                _selectedFavoriteSource ??= 'location';
+                              }
+                            }
+                          } catch (_) {}
+
+                          if (!added) {
+                            // Fallback: add as favorite path (start=end)
+                            try {
+                              final res = await http.post(
+                                Uri.parse("$baseUrl/api/favorite-paths"),
+                                headers: {"Content-Type": "application/json"},
+                                body: jsonEncode({
+                                  "user_id": userId,
+                                  "start_location": station['station_name'] ??
+                                      'Favorite Station',
+                                  "start_lat": lat,
+                                  "start_lon": lon,
+                                  "end_location": station['station_name'] ??
+                                      'Favorite Station',
+                                  "end_lat": lat,
+                                  "end_lon": lon,
+                                }),
+                              );
+                              if (res.statusCode == 201 ||
+                                  res.statusCode == 200) {
+                                added = true;
+                                try {
+                                  final body = jsonDecode(res.body);
+                                  newFavId = body['path_id'] ?? body['id'];
+                                } catch (_) {}
+                                _selectedFavoriteSource = 'path';
+                              } else if (res.statusCode == 400) {
+                                // Possibly duplicate; treat as success after refresh
+                                await _refreshSelectedStationFavoriteState();
+                                if (_selectedStationIsFavorite) {
+                                  added = true;
+                                  _selectedFavoriteSource ??= 'path';
+                                }
+                              }
+                            } catch (_) {}
+                          }
+
+                          if (added) {
+                            setState(() {
+                              _selectedStationIsFavorite = true;
+                              _selectedStationFavoriteId = newFavId;
+                            });
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content: Text('Saved to favorites')),
+                            );
+                            await _refreshSelectedStationFavoriteState();
+                          } else {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Save failed')),
+                            );
+                          }
+                        }
+                      } catch (e) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Error: $e')),
+                        );
+                      }
+                    },
+                    onViewDetails: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => DetailsPage(
+                            config: widget.config,
+                            station: _selectedStationDetail!,
+                          ),
+                        ),
+                      );
+                    },
+                    isFavorite: _selectedStationIsFavorite,
                   ),
                 ),
               ),

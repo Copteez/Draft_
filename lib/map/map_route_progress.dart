@@ -82,14 +82,17 @@ class _RouteProgressDisplayState extends State<RouteProgressDisplay>
       return const SizedBox.shrink();
     }
 
-    return SafeArea(
-      bottom: true,
-      child: Material(
-        color: backgroundColor,
-        elevation: 8,
-        borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(16),
-          topRight: Radius.circular(16),
+    return Material(
+      color: backgroundColor,
+      elevation: 8,
+      borderRadius: const BorderRadius.only(
+        topLeft: Radius.circular(16),
+        topRight: Radius.circular(16),
+      ),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          // Limit the panel to 60% of screen height; remaining content scrolls
+          maxHeight: MediaQuery.of(context).size.height * 0.6,
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -271,7 +274,7 @@ class _RouteProgressDisplayState extends State<RouteProgressDisplay>
               sizeFactor: _animation,
               child: ConstrainedBox(
                 constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.3,
+                  maxHeight: MediaQuery.of(context).size.height * 0.5,
                 ),
                 child: SingleChildScrollView(
                   child: Column(
@@ -288,12 +291,10 @@ class _RouteProgressDisplayState extends State<RouteProgressDisplay>
                 ),
               ),
             ),
-            // Add bottom padding to ensure safe area
-            SizedBox(height: MediaQuery.of(context).padding.bottom),
           ],
-        ),
-      ),
-    );
+        ), // Column
+      ), // ConstrainedBox
+    ); // Material
   }
 
   Widget _buildLocationSummary(Color textColor, Color subtitleColor) {
@@ -520,10 +521,7 @@ class _RouteProgressDisplayState extends State<RouteProgressDisplay>
     );
   }
 
-  double _calculateRouteProgress() {
-    // Use the currentProgress directly as a percentage between 0-100
-    return widget.currentProgress / 100.0;
-  }
+  // Removed unused _calculateRouteProgress helper to reduce warnings
 
   // Format arrival time in a user-friendly way
   String _formatArrivalTime(DateTime arrivalTime) {

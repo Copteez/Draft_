@@ -5,8 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'config.dart';
 import 'network_service.dart';
 import 'AddFavoritePathPage.dart';
+import 'map.dart';
 import 'package:MySecureMap/home_page/widgets/drawer_widget.dart';
-import 'aqi_card.dart'; // ไฟล์ AQICard.dart
 
 class FavoritePathPage extends StatefulWidget {
   final AppConfig config;
@@ -176,10 +176,16 @@ class _FavoritePathPageState extends State<FavoritePathPage> {
 
   // เมื่อกดที่การ์ด จะนำไปสู่หน้า Map โดย auto route
   void _navigateToRoute(FavoritePath fav) {
-    Navigator.pushReplacementNamed(context, '/map', arguments: {
-      "origin": {"lat": fav.startLat, "lon": fav.startLon},
-      "destination": {"lat": fav.endLat, "lon": fav.endLon}
-    });
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => MapPage(config: widget.config),
+        settings: RouteSettings(arguments: {
+          "origin": {"lat": fav.startLat, "lon": fav.startLon},
+          "destination": {"lat": fav.endLat, "lon": fav.endLon}
+        }),
+      ),
+    );
   }
 
   @override
@@ -462,17 +468,18 @@ class FavoritePath {
 
   factory FavoritePath.fromJson(Map<String, dynamic> json) {
     // ดึงค่า start_lat_lon และ end_lat_lon แล้วแยกออกเป็น double
-    String startLatLon = json["start_lat_lon"] ?? "0,0";
+    String startLatLon = (json["start_lat_lon"] ?? "0,0").toString();
     List<String> startParts = startLatLon.split(",");
-    double sLat = double.tryParse(startParts[0]) ?? 0.0;
-    double sLon =
-        startParts.length > 1 ? double.tryParse(startParts[1]) ?? 0.0 : 0.0;
+    double sLat = double.tryParse(startParts[0].trim()) ?? 0.0;
+    double sLon = startParts.length > 1
+        ? double.tryParse(startParts[1].trim()) ?? 0.0
+        : 0.0;
 
-    String endLatLon = json["end_lat_lon"] ?? "0,0";
+    String endLatLon = (json["end_lat_lon"] ?? "0,0").toString();
     List<String> endParts = endLatLon.split(",");
-    double eLat = double.tryParse(endParts[0]) ?? 0.0;
+    double eLat = double.tryParse(endParts[0].trim()) ?? 0.0;
     double eLon =
-        endParts.length > 1 ? double.tryParse(endParts[1]) ?? 0.0 : 0.0;
+        endParts.length > 1 ? double.tryParse(endParts[1].trim()) ?? 0.0 : 0.0;
 
     return FavoritePath(
       pathId: json["path_id"],

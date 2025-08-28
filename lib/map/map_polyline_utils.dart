@@ -42,6 +42,28 @@ Future<List<LatLng>> decodePolyAsync(String poly) async {
   return list.map((e) => LatLng(e[0], e[1])).toList();
 }
 
+// Reduce points by keeping only those farther than a minimum distance from the last kept point
+List<LatLng> simplifyByDistance(List<LatLng> points,
+    {double minDistanceMeters = 25}) {
+  if (points.length <= 2) return points;
+  final List<LatLng> result = [];
+  LatLng last = points.first;
+  result.add(last);
+  final double minKm = minDistanceMeters / 1000.0;
+  for (int i = 1; i < points.length; i++) {
+    final p = points[i];
+    final d = haversine(last.latitude, last.longitude, p.latitude, p.longitude);
+    if (d >= minKm) {
+      result.add(p);
+      last = p;
+    }
+  }
+  if (result.last != points.last) {
+    result.add(points.last);
+  }
+  return result;
+}
+
 List<LatLng> smoothPolyline(List<LatLng> points,
     {int numPointsPerSegment = 10}) {
   if (points.length < 4) return points;

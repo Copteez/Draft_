@@ -4,8 +4,10 @@ import 'package:http/http.dart' as http;
 import 'config.dart';
 import 'map.dart';
 import 'home_page/widgets/drawer_widget.dart';
-import 'AddFavoriteLocationPage.dart';
+// Hide FavoriteLocation class from the Add page to avoid name collision
+import 'AddFavoriteLocationPage.dart' hide FavoriteLocation;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'network_service.dart';
 
 class FavoriteLocationPage extends StatefulWidget {
   final AppConfig config;
@@ -20,28 +22,33 @@ class _FavoriteLocationPageState extends State<FavoriteLocationPage> {
   bool isDarkMode = true;
   List<FavoriteLocation> favoriteLocations = [];
   int? userId;
+  String? _baseUrl;
 
   @override
   void initState() {
     super.initState();
-    _loadFavoriteLocations();
+    _initBaseUrlAndLoad();
+  }
+
+  Future<void> _initBaseUrlAndLoad() async {
+    final service = NetworkService(config: widget.config);
+    final url = await service.getEffectiveBaseUrl();
+    setState(() => _baseUrl = url);
+    await _loadFavoriteLocations();
   }
 
   Future<void> _loadFavoriteLocations() async {
-    // Instead of calling /api/favorite-locations, we call /api/favorite-paths
-    // since your table (favorite_path) doesn’t have a favorite_id column.
     final prefs = await SharedPreferences.getInstance();
     userId = prefs.getInt("user_id");
-    if (userId == null) return;
-    final url =
-        Uri.parse("${widget.config.ngrok}/api/favorite-paths?user_id=$userId");
+    if (userId == null || _baseUrl == null) return;
+    final url = Uri.parse("$_baseUrl/api/favorite-locations?user_id=$userId");
     try {
       final response = await http.get(url);
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        if (data["success"] == true) {
+        if (data["success"] == true && data["favorite_locations"] is List) {
           setState(() {
-            favoriteLocations = (data["favorite_paths"] as List)
+            favoriteLocations = (data["favorite_locations"] as List)
                 .map((json) => FavoriteLocation.fromJson(json))
                 .toList();
           });
@@ -54,7 +61,8 @@ class _FavoriteLocationPageState extends State<FavoriteLocationPage> {
 
   Future<Map<String, dynamic>?> _fetchAQIForLocation(
       FavoriteLocation fav) async {
-    final url = Uri.parse("${widget.config.ngrok}/api/nearest-station-aqi");
+    final base = _baseUrl ?? widget.config.ngrok;
+    final url = Uri.parse("$base/api/nearest-station-aqi");
     try {
       final response = await http.post(url,
           headers: {"Content-Type": "application/json"},
@@ -74,12 +82,13 @@ class _FavoriteLocationPageState extends State<FavoriteLocationPage> {
 
   Future<void> _deleteFavoriteLocation(int favId) async {
     if (userId == null) return;
-    // Call the favorite paths DELETE endpoint since we're using that table.
-    final url = Uri.parse("${widget.config.ngrok}/api/favorite-paths");
+    if (_baseUrl == null) return;
+    final url = Uri.parse("$_baseUrl/api/favorite-locations");
     try {
       final response = await http.delete(url,
           headers: {"Content-Type": "application/json"},
-          body: jsonEncode({"user_id": userId, "path_id": favId}));
+          // Server expects 'location_id' (not 'favorite_id')
+          body: jsonEncode({"user_id": userId, "location_id": favId}));
       if (response.statusCode == 200) {
         await _loadFavoriteLocations();
       } else {
@@ -344,7 +353,7 @@ class _FavoriteLocationPageState extends State<FavoriteLocationPage> {
   }
 }
 
-// Model for FavoriteLocation based on favorite_path table
+// Model for FavoriteLocation based on favorite_locations endpoint
 class FavoriteLocation {
   final int id;
   final String locationName;
@@ -363,27 +372,30 @@ class FavoriteLocation {
   });
 
   factory FavoriteLocation.fromJson(Map<String, dynamic> json) {
-    // Here we assume the server returns start_location and start_lat_lon for favorite paths.
-    double lat = 0, lon = 0;
-    if (json.containsKey("start_lat_lon") && json["start_lat_lon"] is String) {
-      final parts = json["start_lat_lon"].split(",");
+    // Expect fields: favorite_id, location_name, lat_lon ("lat,lon")
+    double lat = (json["lat"] is num) ? (json["lat"] as num).toDouble() : 0;
+    double lon = (json["lon"] is num) ? (json["lon"] as num).toDouble() : 0;
+    if ((lat == 0 || lon == 0) &&
+        json.containsKey("lat_lon") &&
+        json["lat_lon"] is String) {
+      final parts = (json["lat_lon"] as String).split(",");
       if (parts.length >= 2) {
-        lat = double.tryParse(parts[0]) ?? 0;
-        lon = double.tryParse(parts[1]) ?? 0;
+        lat = double.tryParse(parts[0]) ?? lat;
+        lon = double.tryParse(parts[1]) ?? lon;
       }
     }
     return FavoriteLocation(
-      id: json["path_id"], // using path_id as the id
-      locationName: json["start_location"],
-      lat: json["lat"] ?? lat,
-      lon: json["lon"] ?? lon,
-      timestamp: json["timestamp"] ?? "",
-      aqi: json["aqi"] ?? 0,
+      id: json["location_id"] ?? json["favorite_id"] ?? json["id"] ?? 0,
+      locationName: json["location_name"] ?? json["locationName"] ?? "",
+      lat: lat,
+      lon: lon,
+      timestamp: json["timestamp"]?.toString() ?? "",
+      aqi: (json["aqi"] is num) ? (json["aqi"] as num).toInt() : 0,
     );
   }
 
   Map<String, dynamic> toJson() => {
-        "path_id": id,
+        "location_id": id,
         "location_name": locationName,
         "lat": lat,
         "lon": lon,

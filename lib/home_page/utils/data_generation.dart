@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'package:fl_chart/fl_chart.dart';
 import '../../network_service.dart';
 import '../../config.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 /// Fetches real AQI prediction data from API
 Future<void> getAQIPredictionData({
@@ -24,8 +25,15 @@ Future<void> getAQIPredictionData({
     if (networkService != null) {
       baseUrl = await networkService.getEffectiveBaseUrl();
     } else {
-      // Fallback to a default URL
-      baseUrl = 'https://mysecuremap.ngrok.dev';
+      // Fallback to env-based config (no hard-coded URL)
+      final fallbackConfig = AppConfig(
+        waqiApiKey: dotenv.env['WAQIAPIKEY'] ?? '',
+        googleApiKey: dotenv.env['GOOGLE_API'] ?? '',
+        ngrok: dotenv.env['NGROK'] ?? '',
+        zerotier: dotenv.env['ZEROTIER'] ?? '',
+      );
+      baseUrl =
+          await NetworkService(config: fallbackConfig).getEffectiveBaseUrl();
     }
 
     final Uri url = Uri.parse('$baseUrl/api/aqi-prediction');

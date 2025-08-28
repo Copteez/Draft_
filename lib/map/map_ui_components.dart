@@ -3,8 +3,14 @@ import 'map_route_models.dart';
 import 'map_route_utils.dart';
 import 'package:intl/intl.dart';
 
-Widget buildCustomInfoWindow(Map<String, dynamic> station, bool isDarkMode,
-    {VoidCallback? onClose}) {
+Widget buildCustomInfoWindow(
+  Map<String, dynamic> station,
+  bool isDarkMode, {
+  VoidCallback? onClose,
+  VoidCallback? onSaveFavorite,
+  VoidCallback? onViewDetails,
+  bool isFavorite = false,
+}) {
   final aqi = int.tryParse(station['aqi']?.toString() ?? '0') ?? 0;
   final stationName = station['station_name'] ?? 'Unknown Station';
 
@@ -69,22 +75,48 @@ Widget buildCustomInfoWindow(Map<String, dynamic> station, bool isDarkMode,
             ],
           ),
           const SizedBox(height: 10),
+          const SizedBox(height: 4),
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'Tap for more details',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: isDarkMode ? Colors.blue[300] : Colors.blue,
-                  fontStyle: FontStyle.italic,
+              if (onSaveFavorite != null)
+                OutlinedButton.icon(
+                  onPressed: onSaveFavorite,
+                  icon: Icon(
+                    isFavorite ? Icons.star : Icons.star_border,
+                    size: 18,
+                    color: isFavorite
+                        ? (isDarkMode ? Colors.amber : Colors.orange)
+                        : (isDarkMode ? Colors.amber : Colors.orange),
+                  ),
+                  label: Text(
+                    isFavorite ? 'Remove Favorite' : 'Save to Favorites',
+                    style: TextStyle(
+                      color: isDarkMode ? Colors.white : Colors.black87,
+                    ),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(
+                        color:
+                            isDarkMode ? Colors.grey[600]! : Colors.grey[300]!),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  ),
                 ),
-              ),
-              Icon(
-                Icons.arrow_forward,
-                size: 16,
-                color: isDarkMode ? Colors.grey[400] : Colors.grey[700],
-              ),
+              const Spacer(),
+              if (onViewDetails != null)
+                TextButton.icon(
+                  onPressed: onViewDetails,
+                  icon: Icon(Icons.arrow_forward,
+                      size: 16,
+                      color: isDarkMode ? Colors.blue[300] : Colors.blue),
+                  label: Text(
+                    'Details',
+                    style: TextStyle(
+                      color: isDarkMode ? Colors.blue[300] : Colors.blue,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
             ],
           ),
         ],

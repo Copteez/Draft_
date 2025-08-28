@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import 'config.dart';
 import 'MapSelectionPage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'network_service.dart';
 
 class AddFavoriteLocationPage extends StatefulWidget {
   final AppConfig config;
@@ -22,7 +23,6 @@ class AddFavoriteLocationPage extends StatefulWidget {
 class _AddFavoriteLocationPageState extends State<AddFavoriteLocationPage> {
   final TextEditingController locationController = TextEditingController();
   List<dynamic> _suggestions = [];
-  bool _isSearching = false;
   LatLng? _selectedLatLng;
 
   Future<void> _fetchSuggestions(String input) async {
@@ -47,7 +47,6 @@ class _AddFavoriteLocationPageState extends State<AddFavoriteLocationPage> {
         final data = jsonDecode(response.body);
         setState(() {
           _suggestions = data['predictions'] ?? [];
-          _isSearching = true;
         });
       }
     } catch (e) {
@@ -78,7 +77,6 @@ class _AddFavoriteLocationPageState extends State<AddFavoriteLocationPage> {
           locationController.text = name;
           _selectedLatLng = latLng;
           _suggestions = [];
-          _isSearching = false;
         });
       }
     } catch (e) {
@@ -106,8 +104,10 @@ class _AddFavoriteLocationPageState extends State<AddFavoriteLocationPage> {
       return;
     }
 
-    // Prepare POST request to your server endpoint /api/favorite-locations.
-    final url = Uri.parse("${widget.config.ngrok}/api/favorite-locations");
+    // Resolve effective base URL and POST to /api/favorite-locations
+    final service = NetworkService(config: widget.config);
+    final base = await service.getEffectiveBaseUrl();
+    final url = Uri.parse("$base/api/favorite-locations");
     final body = jsonEncode({
       "user_id": userId,
       "location_name": locationController.text,
