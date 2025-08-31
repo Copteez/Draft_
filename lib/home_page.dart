@@ -3,6 +3,7 @@ import 'package:provider/provider.dart'; // Add this import
 import 'package:fl_chart/fl_chart.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:convert';
+import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
@@ -48,11 +49,17 @@ class _HomePageState extends State<HomePage> {
   List<String> _historyLabels = [];
   String _forecastText = "Loading...";
   double _highestAQI = 0.0;
+  List<String> _forecastTimestamps = []; // Add timestamps for forecast
 
   // Add these new properties for prediction data
   List<Map<String, dynamic>> _predictions = [];
   bool _isLoadingPredictions = false;
   String? _predictionError;
+
+  // Add timer for auto-refresh
+  Timer? _refreshTimer;
+  static const Duration _refreshInterval =
+      Duration(minutes: 5); // Refresh every 5 minutes
 
   late final NetworkService networkService;
 
@@ -62,6 +69,30 @@ class _HomePageState extends State<HomePage> {
     networkService = NetworkService(config: widget.config);
     _initializeData();
     _fetchSources();
+    _startAutoRefresh();
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startAutoRefresh() {
+    _refreshTimer = Timer.periodic(_refreshInterval, (timer) {
+      if (mounted) {
+        _refreshData();
+      }
+    });
+  }
+
+  void _refreshData() async {
+    if (_currentPosition != null) {
+      await _fetchNearestStation(_currentPosition!);
+      if (_isHistoryMode) {
+        await _fetchHistoryData();
+      }
+    }
   }
 
   Future<void> _initializeData() async {
@@ -144,7 +175,7 @@ class _HomePageState extends State<HomePage> {
           setState(() {
             _nearestStation = data["nearest_station"];
             _lastUpdated =
-                data["nearest_station"]["timestamp"] ?? "Unknown Time";
+                _formatTimestamp(data["nearest_station"]["timestamp"]);
           });
 
           // Now that we have the station info, load AQI data
@@ -161,20 +192,25 @@ class _HomePageState extends State<HomePage> {
                 location: 'current',
                 stationId: stationId,
                 config: widget.config,
-                onDataGenerated: (aqiData, forecastText, highestAQI) {
+                onDataGenerated:
+                    (aqiData, forecastText, highestAQI, timestamps) {
                   setState(() {
                     _aqiData = aqiData;
                     _forecastText = forecastText;
                     _highestAQI = highestAQI;
+                    _forecastTimestamps = timestamps;
                     _isLoading = false;
 
                     // Create predictions list from the same data
                     _predictions = [];
                     for (int i = 0; i < aqiData.length; i++) {
-                      final DateTime timestamp =
-                          DateTime.now().add(Duration(hours: i));
+                      final String timestamp = i < timestamps.length
+                          ? timestamps[i]
+                          : DateTime.now()
+                              .add(Duration(hours: i))
+                              .toIso8601String();
                       _predictions.add({
-                        'timestamp': timestamp.toIso8601String(),
+                        'timestamp': timestamp,
                         'aqi': aqiData[i].y.toInt(),
                       });
                     }
@@ -202,20 +238,24 @@ class _HomePageState extends State<HomePage> {
             getAQIPredictionData(
               location: 'current',
               config: widget.config,
-              onDataGenerated: (aqiData, forecastText, highestAQI) {
+              onDataGenerated: (aqiData, forecastText, highestAQI, timestamps) {
                 setState(() {
                   _aqiData = aqiData;
                   _forecastText = forecastText;
                   _highestAQI = highestAQI;
+                  _forecastTimestamps = timestamps;
                   _isLoading = false;
 
                   // Create predictions list from the same data
                   _predictions = [];
                   for (int i = 0; i < aqiData.length; i++) {
-                    final DateTime timestamp =
-                        DateTime.now().add(Duration(hours: i));
+                    final String timestamp = i < timestamps.length
+                        ? timestamps[i]
+                        : DateTime.now()
+                            .add(Duration(hours: i))
+                            .toIso8601String();
                     _predictions.add({
-                      'timestamp': timestamp.toIso8601String(),
+                      'timestamp': timestamp,
                       'aqi': aqiData[i].y.toInt(),
                     });
                   }
@@ -273,21 +313,23 @@ class _HomePageState extends State<HomePage> {
           location: 'current',
           stationId: stationId,
           config: widget.config,
-          onDataGenerated: (aqiData, forecastText, highestAQI) {
+          onDataGenerated: (aqiData, forecastText, highestAQI, timestamps) {
             // ...existing code...
             setState(() {
               _aqiData = aqiData;
               _forecastText = forecastText;
               _highestAQI = highestAQI;
+              _forecastTimestamps = timestamps;
               _isLoading = false;
 
               // Create predictions list from the same data
               _predictions = [];
               for (int i = 0; i < aqiData.length; i++) {
-                final DateTime timestamp =
-                    DateTime.now().add(Duration(hours: i));
+                final String timestamp = i < timestamps.length
+                    ? timestamps[i]
+                    : DateTime.now().add(Duration(hours: i)).toIso8601String();
                 _predictions.add({
-                  'timestamp': timestamp.toIso8601String(),
+                  'timestamp': timestamp,
                   'aqi': aqiData[i].y.toInt(),
                 });
               }
@@ -319,19 +361,22 @@ class _HomePageState extends State<HomePage> {
     getAQIPredictionData(
       location: 'current',
       config: widget.config,
-      onDataGenerated: (aqiData, forecastText, highestAQI) {
+      onDataGenerated: (aqiData, forecastText, highestAQI, timestamps) {
         setState(() {
           _aqiData = aqiData;
           _forecastText = forecastText;
           _highestAQI = highestAQI;
+          _forecastTimestamps = timestamps;
           _isLoading = false;
 
           // Create predictions list from the same data
           _predictions = [];
           for (int i = 0; i < aqiData.length; i++) {
-            final DateTime timestamp = DateTime.now().add(Duration(hours: i));
+            final String timestamp = i < timestamps.length
+                ? timestamps[i]
+                : DateTime.now().add(Duration(hours: i)).toIso8601String();
             _predictions.add({
-              'timestamp': timestamp.toIso8601String(),
+              'timestamp': timestamp,
               'aqi': aqiData[i].y.toInt(),
             });
           }
@@ -468,7 +513,7 @@ class _HomePageState extends State<HomePage> {
                 nearestStation: _nearestStation,
                 lastUpdated: _lastUpdated,
               ),
-              const SizedBox(height: 32),
+              const SizedBox(height: 24),
               // ปุ่มเลือก Sources (อยู่ตรงกลางจอ)
               Align(
                 alignment: Alignment.center,
@@ -522,6 +567,7 @@ class _HomePageState extends State<HomePage> {
                 forecastText: _forecastText,
                 onToggleHistoryMode: _toggleHistoryMode,
                 onHistoryViewChange: _handleHistoryViewChange,
+                forecastTimestamps: _forecastTimestamps, // Add timestamps
               ),
               const SizedBox(height: 16),
               // AQI Station map section
@@ -562,91 +608,26 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // Replace the random prediction data with actual API data
-  Widget _buildPredictionCard() {
-    // Get the current theme from provider
-    final themeProvider = Provider.of<ThemeProvider>(context);
-    final bool isDarkMode = themeProvider.isDarkMode;
+  String _formatTimestamp(String? timestamp) {
+    if (timestamp == null) return "Unknown Time";
 
-    return Card(
-      // ... existing card properties ...
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'AQI Prediction',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: isDarkMode ? Colors.white : Colors.black,
-              ),
-            ),
-            const SizedBox(height: 16),
-            if (_isLoadingPredictions)
-              const Center(child: CircularProgressIndicator())
-            else if (_predictionError != null)
-              Text(
-                'Error: $_predictionError',
-                style: TextStyle(color: Colors.red),
-              )
-            else if (_predictions.isEmpty)
-              Text(
-                'No prediction data available',
-                style: TextStyle(
-                  color: isDarkMode ? Colors.white70 : Colors.grey[600],
-                ),
-              )
-            else
-              Column(
-                children: [
-                  for (var prediction in _predictions)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8.0),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            _formatPredictionTime(prediction['timestamp']),
-                            style: TextStyle(
-                              color: isDarkMode
-                                  ? Colors.white70
-                                  : Colors.grey[800],
-                            ),
-                          ),
-                          Text(
-                            'AQI: ${prediction['aqi']}',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: _getAqiColor(prediction['aqi']),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
-              ),
-          ],
-        ),
-      ),
-    );
-  }
+    try {
+      DateTime dateTime = DateTime.parse(timestamp);
+      DateTime now = DateTime.now();
+      Duration difference = now.difference(dateTime);
 
-  // Helper method to format prediction timestamp
-  String _formatPredictionTime(String timestamp) {
-    final dateTime = DateTime.parse(timestamp);
-    return '${dateTime.hour}:00 ${dateTime.day}/${dateTime.month}';
-  }
-
-  // Helper method to get color based on AQI value
-  Color _getAqiColor(int aqi) {
-    if (aqi <= 50) return Colors.green;
-    if (aqi <= 100) return Colors.yellow;
-    if (aqi <= 150) return Colors.orange;
-    if (aqi <= 200) return Colors.red;
-    if (aqi <= 300) return Colors.purple;
-    return Colors.brown;
+      if (difference.inMinutes < 1) {
+        return "Just now";
+      } else if (difference.inMinutes < 60) {
+        return "${difference.inMinutes} minutes ago";
+      } else if (difference.inHours < 24) {
+        return "${difference.inHours} hours ago";
+      } else {
+        return "${difference.inDays} days ago";
+      }
+    } catch (e) {
+      return timestamp;
+    }
   }
 
   double getPollutantNumericValue(dynamic val) {

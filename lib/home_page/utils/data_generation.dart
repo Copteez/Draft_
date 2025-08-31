@@ -9,8 +9,8 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 Future<void> getAQIPredictionData({
   required String location,
   String? stationId, // Add stationId parameter
-  required void Function(
-          List<FlSpot> aqiData, String forecastText, double highestAQI)
+  required void Function(List<FlSpot> aqiData, String forecastText,
+          double highestAQI, List<String> timestamps)
       onDataGenerated,
   Function(String error)? onError,
   AppConfig? config,
@@ -67,11 +67,18 @@ Future<void> getAQIPredictionData({
         int maxHour = 0;
 
         // Process API response into FlSpot data
+        List<Map<String, dynamic>> timestampedData = [];
         for (int i = 0; i < predictions.length && i < 24; i++) {
           final prediction = predictions[i];
           final double aqi = double.tryParse(prediction['aqi'].toString()) ?? 0;
+          final String timestamp = prediction['timestamp']?.toString() ?? '';
 
           aqiData.add(FlSpot(i.toDouble(), aqi));
+          timestampedData.add({
+            'index': i,
+            'aqi': aqi,
+            'timestamp': timestamp,
+          });
 
           if (aqi > maxAQI) {
             maxAQI = aqi;
@@ -85,13 +92,30 @@ Future<void> getAQIPredictionData({
           return;
         }
 
-        // Format the forecast text
-        String timeFormat = maxHour < 10 ? "0$maxHour:00" : "$maxHour:00";
+        // Format the forecast text using server timestamp
+        String timeFormat = "00:00";
+        if (timestampedData.isNotEmpty && maxHour < timestampedData.length) {
+          final maxTimestamp = timestampedData[maxHour]['timestamp'];
+          if (maxTimestamp != null && maxTimestamp.isNotEmpty) {
+            try {
+              final DateTime dateTime = DateTime.parse(maxTimestamp);
+              timeFormat = "${dateTime.hour.toString().padLeft(2, '0')}:00";
+            } catch (e) {
+              timeFormat = maxHour < 10 ? "0$maxHour:00" : "$maxHour:00";
+            }
+          }
+        }
         String aqiCategory = _getAQICategory(maxAQI.toInt());
         String forecastText =
             "The AQI is expected to reach ${maxAQI.toInt()} ($aqiCategory) at $timeFormat";
 
-        onDataGenerated(aqiData, forecastText, maxAQI);
+        onDataGenerated(
+            aqiData,
+            forecastText,
+            maxAQI,
+            timestampedData
+                .map((item) => item['timestamp'] as String)
+                .toList());
       } else {
         final errorMessage = data['error'] ?? 'Unknown API error';
         if (onError != null) {
@@ -115,14 +139,17 @@ Future<void> getAQIPredictionData({
 
 /// Fallback method when API fails - uses realistic prediction model
 void _useFallbackData(
-    void Function(List<FlSpot> aqiData, String forecastText, double highestAQI)
+    void Function(List<FlSpot> aqiData, String forecastText, double highestAQI,
+            List<String> timestamps)
         onDataGenerated) {
   List<FlSpot> aqiData = [];
+  List<String> fallbackTimestamps = [];
   int maxAQI = 0;
   int maxHour = 0;
 
   // Base value and time patterns for realistic prediction model
   int baseValue = 50;
+  DateTime now = DateTime.now();
 
   // Urban AQI typically follows patterns: higher during morning and evening rush hours
   for (int i = 0; i < 24; i++) {
@@ -150,6 +177,10 @@ void _useFallbackData(
 
     aqiData.add(FlSpot(i.toDouble(), aqi.toDouble()));
 
+    // Generate fallback timestamps
+    DateTime futureTime = now.add(Duration(hours: i));
+    fallbackTimestamps.add(futureTime.toIso8601String());
+
     if (aqi > maxAQI) {
       maxAQI = aqi;
       maxHour = i;
@@ -161,7 +192,7 @@ void _useFallbackData(
   String forecastText =
       "The AQI is expected to reach $maxAQI ($aqiCategory) at $timeFormat";
 
-  onDataGenerated(aqiData, forecastText, maxAQI.toDouble());
+  onDataGenerated(aqiData, forecastText, maxAQI.toDouble(), fallbackTimestamps);
 }
 
 // Helper function to categorize AQI values

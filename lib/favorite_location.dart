@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:http/http.dart' as http;
+import 'package:provider/provider.dart';
 import 'config.dart';
 import 'map.dart';
 import 'home_page/widgets/drawer_widget.dart';
@@ -8,6 +10,7 @@ import 'home_page/widgets/drawer_widget.dart';
 import 'AddFavoriteLocationPage.dart' hide FavoriteLocation;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'network_service.dart';
+import 'theme_provider.dart';
 
 class FavoriteLocationPage extends StatefulWidget {
   final AppConfig config;
@@ -19,10 +22,12 @@ class FavoriteLocationPage extends StatefulWidget {
 }
 
 class _FavoriteLocationPageState extends State<FavoriteLocationPage> {
-  bool isDarkMode = true;
   List<FavoriteLocation> favoriteLocations = [];
   int? userId;
   String? _baseUrl;
+
+  // Cache AQI data to prevent refetching on theme changes
+  final Map<String, Map<String, dynamic>?> _aqiCache = {};
 
   @override
   void initState() {
@@ -38,6 +43,9 @@ class _FavoriteLocationPageState extends State<FavoriteLocationPage> {
   }
 
   Future<void> _loadFavoriteLocations() async {
+    // Clear AQI cache when loading new locations
+    _aqiCache.clear();
+
     final prefs = await SharedPreferences.getInstance();
     userId = prefs.getInt("user_id");
     if (userId == null || _baseUrl == null) return;
@@ -61,6 +69,13 @@ class _FavoriteLocationPageState extends State<FavoriteLocationPage> {
 
   Future<Map<String, dynamic>?> _fetchAQIForLocation(
       FavoriteLocation fav) async {
+    final cacheKey = "${fav.lat},${fav.lon}";
+
+    // Return cached data if available
+    if (_aqiCache.containsKey(cacheKey)) {
+      return _aqiCache[cacheKey];
+    }
+
     final base = _baseUrl ?? widget.config.ngrok;
     final url = Uri.parse("$base/api/nearest-station-aqi");
     try {
@@ -71,12 +86,18 @@ class _FavoriteLocationPageState extends State<FavoriteLocationPage> {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data["success"] == true) {
-          return data["nearest_station"];
+          final result = data["nearest_station"];
+          // Cache the result
+          _aqiCache[cacheKey] = result;
+          return result;
         }
       }
     } catch (e) {
       print("Error fetching AQI for location: $e");
     }
+
+    // Cache null result to prevent repeated failed requests
+    _aqiCache[cacheKey] = null;
     return null;
   }
 
@@ -90,6 +111,8 @@ class _FavoriteLocationPageState extends State<FavoriteLocationPage> {
           // Server expects 'location_id' (not 'favorite_id')
           body: jsonEncode({"user_id": userId, "location_id": favId}));
       if (response.statusCode == 200) {
+        // Clear AQI cache when deleting location
+        _aqiCache.clear();
         await _loadFavoriteLocations();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -102,11 +125,23 @@ class _FavoriteLocationPageState extends State<FavoriteLocationPage> {
 
   @override
   Widget build(BuildContext context) {
-    final backgroundColor = isDarkMode ? const Color(0xFF2C2C47) : Colors.white;
-    final textColor = isDarkMode ? Colors.white : Colors.black;
-    final cardColor = isDarkMode ? const Color(0xFF545978) : Colors.white;
-    final iconColor = isDarkMode ? Colors.white : Colors.black;
+    return Consumer<ThemeProvider>(
+      builder: (context, themeProvider, child) {
+        final bool isDarkMode = themeProvider.isDarkMode;
 
+        final backgroundColor =
+            isDarkMode ? const Color(0xFF2C2C47) : Colors.white;
+        final textColor = isDarkMode ? Colors.white : Colors.black;
+        final iconColor = isDarkMode ? Colors.white : Colors.black;
+
+        return _buildScaffold(
+            isDarkMode, backgroundColor, textColor, iconColor);
+      },
+    );
+  }
+
+  Widget _buildScaffold(bool isDarkMode, Color backgroundColor, Color textColor,
+      Color iconColor) {
     return Scaffold(
       drawer: buildDrawer(context: context, isDarkMode: isDarkMode),
       appBar: AppBar(
@@ -118,15 +153,31 @@ class _FavoriteLocationPageState extends State<FavoriteLocationPage> {
         backgroundColor: backgroundColor,
         iconTheme: IconThemeData(color: textColor),
         actions: [
-          IconButton(
-            icon: Icon(isDarkMode ? Icons.dark_mode : Icons.light_mode,
-                color: iconColor),
-            onPressed: () {
-              setState(() {
-                isDarkMode = !isDarkMode;
-              });
-            },
-          )
+          Row(
+            children: [
+              Icon(
+                isDarkMode
+                    ? CupertinoIcons.moon_fill
+                    : CupertinoIcons.sun_max_fill,
+                color: iconColor,
+                size: 24,
+              ),
+              Consumer<ThemeProvider>(
+                builder: (context, themeProvider, child) => Switch(
+                  value: themeProvider.isDarkMode,
+                  onChanged: (value) {
+                    Provider.of<ThemeProvider>(context, listen: false)
+                        .toggleTheme(value);
+                  },
+                  activeColor: Colors.orange,
+                  inactiveThumbColor: Colors.grey,
+                  activeTrackColor: Colors.orange.withOpacity(0.5),
+                  inactiveTrackColor: Colors.grey.withOpacity(0.5),
+                ),
+              ),
+              const SizedBox(width: 10),
+            ],
+          ),
         ],
       ),
       backgroundColor: backgroundColor,
@@ -134,15 +185,79 @@ class _FavoriteLocationPageState extends State<FavoriteLocationPage> {
         onRefresh: _loadFavoriteLocations,
         child: favoriteLocations.isEmpty
             ? Center(
-                child: Text(
-                  "No favorite locations added.",
-                  style: TextStyle(
-                    fontSize: 18,
-                    color: textColor,
-                  ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withOpacity(0.1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.location_off_outlined,
+                        size: 64,
+                        color: Colors.orange.withOpacity(0.7),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      "No Favorite Locations",
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: textColor,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      "Start by adding your first favorite location\nto quickly check air quality",
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: isDarkMode ? Colors.grey[400] : Colors.grey[600],
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 32),
+                    ElevatedButton.icon(
+                      onPressed: () async {
+                        final result = await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) =>
+                                AddFavoriteLocationPage(config: widget.config),
+                          ),
+                        );
+                        if (result != null) {
+                          await _loadFavoriteLocations();
+                        }
+                      },
+                      icon: const Icon(Icons.add_location, color: Colors.white),
+                      label: const Text(
+                        "Add Location",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 12,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(25),
+                        ),
+                        elevation: 4,
+                      ),
+                    ),
+                  ],
                 ),
               )
             : ListView.builder(
+                padding: const EdgeInsets.symmetric(vertical: 8),
                 itemCount: favoriteLocations.length,
                 itemBuilder: (context, index) {
                   final fav = favoriteLocations[index];
@@ -160,138 +275,330 @@ class _FavoriteLocationPageState extends State<FavoriteLocationPage> {
                         ),
                       );
                     },
-                    child: Card(
-                      color: cardColor,
-                      margin: const EdgeInsets.all(8.0),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16)),
-                      elevation: 4,
-                      child: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    fav.locationName,
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold,
-                                      color: textColor,
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(
+                          horizontal: 16.0, vertical: 8.0),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: isDarkMode
+                              ? [
+                                  const Color(0xFF545978),
+                                  const Color(0xFF3E4961)
+                                ]
+                              : [Colors.white, const Color(0xFFF8F9FA)],
+                        ),
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: isDarkMode
+                                ? Colors.black.withOpacity(0.3)
+                                : Colors.grey.withOpacity(0.2),
+                            blurRadius: 10,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(20),
+                        child: Container(
+                          padding: const EdgeInsets.all(20.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Header with location name and menu
+                              Row(
+                                children: [
+                                  // Location icon
+                                  Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: Colors.orange.withOpacity(0.2),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Icon(
+                                      Icons.location_on,
+                                      color: Colors.orange,
+                                      size: 20,
                                     ),
                                   ),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.delete,
-                                      color: Colors.red),
-                                  onPressed: () {
-                                    showDialog(
-                                      context: context,
-                                      builder: (ctx) => AlertDialog(
-                                        title: const Text("Confirm Delete"),
-                                        content: const Text(
-                                            "Are you sure you want to delete this favorite location?"),
-                                        actions: [
-                                          TextButton(
-                                            onPressed: () => Navigator.pop(ctx),
-                                            child: const Text("Cancel"),
+                                  const SizedBox(width: 12),
+                                  // Location name
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          fav.locationName,
+                                          style: TextStyle(
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.bold,
+                                            color: textColor,
                                           ),
-                                          TextButton(
-                                            onPressed: () {
-                                              Navigator.pop(ctx);
-                                              _deleteFavoriteLocation(fav.id);
-                                            },
-                                            child: const Text("Delete"),
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          "Tap to view on map",
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: isDarkMode
+                                                ? Colors.grey[400]
+                                                : Colors.grey[600],
                                           ),
-                                        ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  // Delete button
+                                  PopupMenuButton<String>(
+                                    icon: Icon(
+                                      Icons.more_vert,
+                                      color: isDarkMode
+                                          ? Colors.grey[400]
+                                          : Colors.grey[600],
+                                    ),
+                                    onSelected: (value) {
+                                      if (value == 'delete') {
+                                        showDialog(
+                                          context: context,
+                                          builder: (ctx) => AlertDialog(
+                                            backgroundColor: isDarkMode
+                                                ? const Color(0xFF2C2C47)
+                                                : Colors.white,
+                                            title: Text(
+                                              "Remove Location",
+                                              style:
+                                                  TextStyle(color: textColor),
+                                            ),
+                                            content: Text(
+                                              "Are you sure you want to remove this favorite location?",
+                                              style:
+                                                  TextStyle(color: textColor),
+                                            ),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () =>
+                                                    Navigator.pop(ctx),
+                                                child: Text(
+                                                  "Cancel",
+                                                  style: TextStyle(
+                                                      color: Colors.grey[600]),
+                                                ),
+                                              ),
+                                              TextButton(
+                                                onPressed: () {
+                                                  Navigator.pop(ctx);
+                                                  _deleteFavoriteLocation(
+                                                      fav.id);
+                                                },
+                                                child: const Text(
+                                                  "Remove",
+                                                  style: TextStyle(
+                                                      color: Colors.red),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      }
+                                    },
+                                    itemBuilder: (context) => [
+                                      PopupMenuItem(
+                                        value: 'delete',
+                                        child: Row(
+                                          children: [
+                                            const Icon(Icons.delete_outline,
+                                                color: Colors.red, size: 20),
+                                            const SizedBox(width: 8),
+                                            Text(
+                                              'Remove',
+                                              style:
+                                                  TextStyle(color: Colors.red),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+
+                              const SizedBox(height: 16),
+
+                              // AQI Information Section
+                              FutureBuilder<Map<String, dynamic>?>(
+                                future: _fetchAQIForLocation(fav),
+                                builder: (context, snapshot) {
+                                  if (snapshot.connectionState ==
+                                      ConnectionState.waiting) {
+                                    return Container(
+                                      height: 80,
+                                      child: const Center(
+                                        child: SizedBox(
+                                          width: 24,
+                                          height: 24,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2),
+                                        ),
                                       ),
                                     );
-                                  },
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              "Air Quality Index",
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: isDarkMode
-                                    ? Colors.grey[300]
-                                    : Colors.grey[600],
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            FutureBuilder<Map<String, dynamic>?>(
-                              future: _fetchAQIForLocation(fav),
-                              builder: (context, snapshot) {
-                                if (snapshot.connectionState ==
-                                    ConnectionState.waiting) {
-                                  return const Center(
-                                      child: CircularProgressIndicator());
-                                }
-                                if (snapshot.hasError || !snapshot.hasData) {
-                                  return Text("AQI not available",
-                                      style: TextStyle(color: textColor));
-                                }
-                                final aqiData = snapshot.data!;
-                                final aqi = aqiData["aqi"] as int;
-                                return Column(
-                                  children: [
-                                    Text(
-                                      "$aqi",
-                                      style: TextStyle(
-                                        fontSize: 28,
-                                        fontWeight: FontWeight.bold,
-                                        color: _getAQIColor(aqi),
-                                      ),
-                                    ),
-                                    Text(
-                                      _getAQILabel(aqi),
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w600,
-                                        color: _getAQIColor(aqi),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 20),
-                                    Container(
-                                      width: double.infinity,
-                                      padding: const EdgeInsets.all(12),
+                                  }
+
+                                  if (snapshot.hasError || !snapshot.hasData) {
+                                    return Container(
+                                      padding: const EdgeInsets.all(16),
                                       decoration: BoxDecoration(
                                         color: isDarkMode
                                             ? const Color(0xFF444C63)
                                             : Colors.grey[100],
-                                        borderRadius: BorderRadius.circular(8),
+                                        borderRadius: BorderRadius.circular(12),
                                       ),
-                                      child: Column(
+                                      child: Row(
                                         children: [
-                                          Text(
-                                            "Station: ${aqiData["station_name"]}",
-                                            textAlign: TextAlign.center,
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              color: textColor,
-                                            ),
+                                          Icon(
+                                            Icons.error_outline,
+                                            color: Colors.orange,
+                                            size: 20,
                                           ),
+                                          const SizedBox(width: 8),
                                           Text(
-                                            _getAQIRecommendation(aqi),
-                                            textAlign: TextAlign.center,
+                                            "AQI data unavailable",
                                             style: TextStyle(
-                                              fontSize: 14,
                                               color: textColor,
+                                              fontSize: 14,
                                             ),
                                           ),
                                         ],
                                       ),
+                                    );
+                                  }
+
+                                  final aqiData = snapshot.data!;
+                                  final aqi = aqiData["aqi"] as int;
+                                  final aqiColor = _getAQIColor(aqi);
+
+                                  return Container(
+                                    padding: const EdgeInsets.all(16),
+                                    decoration: BoxDecoration(
+                                      color: isDarkMode
+                                          ? const Color(0xFF444C63)
+                                          : Colors.grey[50],
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(
+                                        color: aqiColor.withOpacity(0.3),
+                                        width: 1,
+                                      ),
                                     ),
-                                  ],
-                                );
-                              },
-                            ),
-                          ],
+                                    child: Row(
+                                      children: [
+                                        // AQI Circle Badge
+                                        Container(
+                                          width: 60,
+                                          height: 60,
+                                          decoration: BoxDecoration(
+                                            color: aqiColor.withOpacity(0.1),
+                                            shape: BoxShape.circle,
+                                            border: Border.all(
+                                              color: aqiColor,
+                                              width: 2,
+                                            ),
+                                          ),
+                                          child: Column(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              Text(
+                                                "$aqi",
+                                                style: TextStyle(
+                                                  fontSize: 18,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: aqiColor,
+                                                ),
+                                              ),
+                                              Text(
+                                                "AQI",
+                                                style: TextStyle(
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.w500,
+                                                  color: aqiColor,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+
+                                        const SizedBox(width: 16),
+
+                                        // AQI Details
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  Container(
+                                                    padding: const EdgeInsets
+                                                        .symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 4,
+                                                    ),
+                                                    decoration: BoxDecoration(
+                                                      color: aqiColor
+                                                          .withOpacity(0.2),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              8),
+                                                    ),
+                                                    child: Text(
+                                                      _getAQILabel(aqi),
+                                                      style: TextStyle(
+                                                        fontSize: 12,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                        color: aqiColor,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 8),
+                                              Text(
+                                                "Station: ${aqiData["station_name"]}",
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: isDarkMode
+                                                      ? Colors.grey[400]
+                                                      : Colors.grey[600],
+                                                ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                _getAQIRecommendation(aqi),
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: textColor,
+                                                  height: 1.3,
+                                                ),
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -299,21 +606,43 @@ class _FavoriteLocationPageState extends State<FavoriteLocationPage> {
                 },
               ),
       ),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: Colors.orange,
-        child: const Icon(Icons.add),
-        onPressed: () async {
-          final result = await Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => AddFavoriteLocationPage(
-                  config: widget.config, isDarkMode: isDarkMode),
+      floatingActionButton: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.orange.withOpacity(0.3),
+              blurRadius: 8,
+              offset: const Offset(0, 4),
             ),
-          );
-          if (result != null) {
-            await _loadFavoriteLocations();
-          }
-        },
+          ],
+        ),
+        child: FloatingActionButton.extended(
+          backgroundColor: Colors.orange,
+          foregroundColor: Colors.white,
+          onPressed: () async {
+            final result = await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) =>
+                    AddFavoriteLocationPage(config: widget.config),
+              ),
+            );
+            if (result != null) {
+              await _loadFavoriteLocations();
+            }
+          },
+          icon: const Icon(Icons.add_location),
+          label: const Text(
+            "Add Location",
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
       ),
     );
   }
@@ -338,17 +667,17 @@ class _FavoriteLocationPageState extends State<FavoriteLocationPage> {
 
   String _getAQIRecommendation(int aqi) {
     if (aqi <= 50) {
-      return "Air quality is good. Perfect for outdoor activities!";
+      return "Perfect for outdoor activities!";
     } else if (aqi <= 100) {
-      return "Air quality is acceptable. Sensitive individuals should limit prolonged outdoor exposure.";
+      return "Acceptable for most people";
     } else if (aqi <= 150) {
-      return "Members of sensitive groups may experience health effects.";
+      return "Sensitive groups should be cautious";
     } else if (aqi <= 200) {
-      return "Everyone may begin to experience health effects.";
+      return "Consider limiting outdoor time";
     } else if (aqi <= 300) {
-      return "Health alert: everyone may experience more serious health effects.";
+      return "Avoid prolonged outdoor exposure";
     } else {
-      return "Health warnings of emergency conditions. Entire population is likely to be affected.";
+      return "Stay indoors if possible";
     }
   }
 }

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
@@ -227,8 +228,21 @@ class _MapPageState extends State<MapPage> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // Wait for stations to be loaded first
-    _handleRouteArgumentsAfterStationsLoad();
+    // Check if we have route arguments to handle
+    final args =
+        ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+    if (args != null &&
+        args.containsKey("origin") &&
+        args.containsKey("destination") &&
+        !_hasHandledRouteArguments) {
+      // Wait for baseUrl to be initialized before handling route arguments
+      _initializeBaseUrl().then((_) {
+        if (mounted) {
+          _handleRouteArgumentsAfterStationsLoad();
+          _hasHandledRouteArguments = true;
+        }
+      });
+    }
   }
 
   void _handleRouteArgumentsAfterStationsLoad() {
@@ -256,6 +270,17 @@ class _MapPageState extends State<MapPage> {
     final origin = LatLng(originMap["lat"], originMap["lon"]);
     final destination = LatLng(destinationMap["lat"], destinationMap["lon"]);
 
+    // Clear any existing route state to ensure fresh rendering
+    setState(() {
+      _showRouteProgress = false;
+      polylines.clear();
+      _routePolylines.clear();
+      _allPolylines.clear();
+      _selectedRouteIndex = -1;
+      _userSelectedRouteIndex = -1;
+      _routeOptions = [];
+    });
+
     if (_mapController == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (_mapController != null) {
@@ -281,10 +306,21 @@ class _MapPageState extends State<MapPage> {
           .animateCamera(CameraUpdate.newLatLngZoom(_currentLocation!, 14));
     }
 
+    // Check for route arguments after map is ready (only if not already handled in didChangeDependencies)
     if (!_hasHandledRouteArguments) {
-      // Update this line to call the new method instead of the old one
-      _handleRouteArgumentsAfterStationsLoad();
-      _hasHandledRouteArguments = true;
+      final args =
+          ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+      if (args != null &&
+          args.containsKey("origin") &&
+          args.containsKey("destination")) {
+        // Ensure baseUrl is initialized before handling route arguments
+        _initializeBaseUrl().then((_) {
+          if (mounted && !_hasHandledRouteArguments) {
+            _handleRouteArgumentsAfterStationsLoad();
+            _hasHandledRouteArguments = true;
+          }
+        });
+      }
     }
   }
 
@@ -341,6 +377,10 @@ class _MapPageState extends State<MapPage> {
         if (data["success"] == true) {
           setState(() {
             _allStations = List<Map<String, dynamic>>.from(data["stations"]);
+
+            // Add mock stations for testing (easy to remove)
+            _addMockStations();
+
             if (_selectedParameter != "AQI") {
               _allStations = _allStations.where((station) {
                 var value = station[_selectedParameter.toLowerCase()];
@@ -362,6 +402,70 @@ class _MapPageState extends State<MapPage> {
         _isLoadingMarkers = false;
       });
     }
+  }
+
+  // Mock stations for testing - Easy to delete this entire method
+  void _addMockStations() {
+    // Add mock station 1: ท่าทราย
+    _allStations.add({
+      "station_id": "mock_001",
+      "station_name": "ท่าทราย",
+      "lat": "13.874142",
+      "lon": "100.532964",
+      "aqi": 171,
+      "pm25": 75,
+      "pm10": 85,
+      "o3": 45,
+      "so2": 12,
+      "timestamp": DateTime.now().toIso8601String(),
+      "source": "MOCK",
+      "dew_point": 25.5,
+      "wind_speed": 8.2,
+      "humidity": 68,
+      "pressure": 1013.2,
+    });
+
+    // Add mock station 2: บางตลาด
+    _allStations.add({
+      "station_id": "mock_002",
+      "station_name": "บางตลาด",
+      "lat": "13.889526",
+      "lon": "100.538375",
+      "aqi": 111,
+      "pm25": 42,
+      "pm10": 55,
+      "o3": 38,
+      "so2": 8,
+      "timestamp": DateTime.now().toIso8601String(),
+      "source": "MOCK",
+      "dew_point": 24.8,
+      "wind_speed": 6.5,
+      "humidity": 72,
+      "pressure": 1012.8,
+    });
+  }
+
+  // Method to remove mock stations - Easy to delete
+  void _removeMockStations() {
+    _allStations.removeWhere((station) =>
+        station["station_id"] == "mock_001" ||
+        station["station_id"] == "mock_002");
+  }
+
+  // Method to toggle mock stations - Easy to delete
+  void _toggleMockStations() {
+    setState(() {
+      bool hasMockStations = _allStations.any((station) =>
+          station["station_id"] == "mock_001" ||
+          station["station_id"] == "mock_002");
+
+      if (hasMockStations) {
+        _removeMockStations();
+      } else {
+        _addMockStations();
+      }
+    });
+    _populateAllMarkers();
   }
 
   Future<void> _populateAllMarkers({List<LatLng>? selectedRoute}) async {
@@ -534,8 +638,8 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  Future<void> _loadRoute(
-      LatLng origin, LatLng destination, String travelMode) async {
+  Future<void> _loadRoute(LatLng origin, LatLng destination, String travelMode,
+      {String? startLocationName, String? endLocationName}) async {
     setState(() {
       _routePolylines.clear();
       _allPolylines.clear();
@@ -545,8 +649,12 @@ class _MapPageState extends State<MapPage> {
     });
     _populateAllMarkers();
 
-    // Save this route to history on server
-    _saveRouteToHistory(origin, destination);
+    // Save this route to history on server (only for new searches, not navigation from history)
+    if (startLocationName != null && endLocationName != null) {
+      _saveRouteToHistory(origin, destination,
+          startLocationName: startLocationName,
+          endLocationName: endLocationName);
+    }
 
     final String apiKey = widget.config.googleApiKey;
     final url = Uri.https('maps.googleapis.com', '/maps/api/directions/json', {
@@ -650,6 +758,14 @@ class _MapPageState extends State<MapPage> {
 
           _updateMarkers();
 
+          // Start location tracking automatically when route is loaded
+          _startLocationUpdates();
+
+          // Update nearest station immediately if we have current location
+          if (_currentLocation != null) {
+            _updateNearestStation();
+          }
+
           if (_mapController != null) {
             final bounds = getRouteBounds(origin, destination);
             _mapController!
@@ -658,6 +774,9 @@ class _MapPageState extends State<MapPage> {
 
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
+            // Force a UI refresh to ensure polylines are visible
+            setState(() {});
+
             // Small delay to ensure the drawer animation is smooth
             Future.delayed(const Duration(milliseconds: 120), () {
               if (mounted) {
@@ -686,7 +805,8 @@ class _MapPageState extends State<MapPage> {
   }
 
   // Update the method to save route history to server
-  Future<void> _saveRouteToHistory(LatLng origin, LatLng destination) async {
+  Future<void> _saveRouteToHistory(LatLng origin, LatLng destination,
+      {String? startLocationName, String? endLocationName}) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final userId = prefs.getInt('user_id');
@@ -698,10 +818,10 @@ class _MapPageState extends State<MapPage> {
 
       final body = jsonEncode({
         "user_id": userId,
-        "start_location": "Start",
+        "start_location": startLocationName ?? "Start",
         "start_lat": origin.latitude,
         "start_lon": origin.longitude,
-        "end_location": "End",
+        "end_location": endLocationName ?? "End",
         "end_lat": destination.latitude,
         "end_lon": destination.longitude,
       });
@@ -881,6 +1001,8 @@ class _MapPageState extends State<MapPage> {
       _isRoutePlotting = false;
       _activeStationIds.clear();
       _routeOptions = [];
+      // Reset route arguments flag to allow new route loading
+      _hasHandledRouteArguments = false;
     });
     // Reload all stations/markers without route filters
     await _fetchAllAQIStations();
@@ -950,28 +1072,53 @@ class _MapPageState extends State<MapPage> {
       }
     }
 
-    // Find the highest AQI zone in the route
-    RouteCalculation? worstZone;
-    int highestAqi = 0;
+    // Determine zone types and calculate appropriate warnings
+    String? timeToTargetZone;
+    String? distanceToTargetZone;
+    String? zoneWarningType;
 
-    for (var calc in selectedRoute.calculations) {
-      if (calc.aqi > highestAqi) {
-        highestAqi = calc.aqi;
-        worstZone = calc;
+    // Current user's AQI level (from nearest station)
+    bool currentlyInGreenZone = nearestStationAqi <= 150;
+
+    // Check if entire route is in green zone
+    bool entireRouteInGreenZone =
+        selectedRoute.calculations.every((calc) => calc.aqi <= 150);
+
+    if (entireRouteInGreenZone) {
+      // Case 3: No hazard zone in this route
+      zoneWarningType = "no_hazard";
+    } else if (nearestCalculation != null) {
+      // Find appropriate target zone ahead of current position
+      RouteCalculation? targetZone;
+
+      if (currentlyInGreenZone) {
+        // Case 1: In green zone, look for first hazard zone ahead (AQI > 150)
+        for (var calc in selectedRoute.calculations) {
+          if (calc.aqi > 150 &&
+              calc.startDistance > nearestCalculation.endDistance) {
+            targetZone = calc;
+            zoneWarningType = "hazard";
+            break;
+          }
+        }
+      } else {
+        // Case 2: In hazard zone, look for first green zone ahead (AQI <= 150)
+        for (var calc in selectedRoute.calculations) {
+          if (calc.aqi <= 150 &&
+              calc.startDistance > nearestCalculation.endDistance) {
+            targetZone = calc;
+            zoneWarningType = "green";
+            break;
+          }
+        }
       }
-    }
 
-    // Calculate time and distance to worst zone if found
-    String? timeToWorstZone;
-    String? distanceToWorstZone;
-
-    if (worstZone != null && nearestCalculation != null) {
-      // Only calculate if worst zone is ahead of current position
-      if (worstZone.startDistance > nearestCalculation.endDistance) {
+      // Calculate time and distance to target zone if found
+      if (targetZone != null) {
         // Calculate distance in km
         double distanceKm =
-            worstZone.startDistance - nearestCalculation.endDistance;
-        distanceToWorstZone = distanceKm < 1.0
+            targetZone.startDistance - nearestCalculation.endDistance;
+        distanceToTargetZone = distanceKm < 1.0
             ? "${(distanceKm * 1000).toInt()}m"
             : "${distanceKm.toStringAsFixed(1)}km";
 
@@ -980,12 +1127,12 @@ class _MapPageState extends State<MapPage> {
         double timeHours = distanceKm / 30.0;
         if (timeHours < 1.0 / 60.0) {
           // Less than a minute
-          timeToWorstZone = "< 1 min";
+          timeToTargetZone = "< 1 min";
         } else if (timeHours < 1.0) {
           // Less than an hour
-          timeToWorstZone = "${(timeHours * 60).toInt()} min";
+          timeToTargetZone = "${(timeHours * 60).toInt()} min";
         } else {
-          timeToWorstZone = "${timeHours.toStringAsFixed(1)} hours";
+          timeToTargetZone = "${timeHours.toStringAsFixed(1)} hours";
         }
       }
     }
@@ -1028,8 +1175,9 @@ class _MapPageState extends State<MapPage> {
             nearestStationName: nearestStation,
             progressPercent: progressPercent,
             aqi: nearestStationAqi,
-            timeToWorstZone: timeToWorstZone,
-            distanceToWorstZone: distanceToWorstZone,
+            timeToTargetZone: timeToTargetZone,
+            distanceToTargetZone: distanceToTargetZone,
+            zoneWarningType: zoneWarningType,
           );
         }
       }
@@ -1874,6 +2022,46 @@ class _MapPageState extends State<MapPage> {
     });
   }
 
+  // Helper function to get location name from coordinates
+  Future<String> _getLocationNameFromCoordinates(
+      LatLng coordinates, String fallbackName) async {
+    try {
+      List<Placemark> placemarks = await placemarkFromCoordinates(
+          coordinates.latitude, coordinates.longitude);
+      if (placemarks.isNotEmpty) {
+        Placemark place = placemarks.first;
+
+        // Create a more descriptive address from the placemark components
+        List<String> addressParts = [];
+
+        if (place.thoroughfare?.isNotEmpty ?? false) {
+          addressParts.add(place.thoroughfare!);
+        }
+
+        if (place.subLocality?.isNotEmpty ?? false) {
+          addressParts.add(place.subLocality!);
+        } else if (place.locality?.isNotEmpty ?? false) {
+          addressParts.add(place.locality!);
+        }
+
+        if (place.administrativeArea?.isNotEmpty ?? false) {
+          addressParts.add(place.administrativeArea!);
+        }
+
+        if (addressParts.isNotEmpty) {
+          return addressParts.join(", ");
+        } else if (place.name?.isNotEmpty ?? false) {
+          return place.name!;
+        } else if (place.locality?.isNotEmpty ?? false) {
+          return place.locality!;
+        }
+      }
+    } catch (e) {
+      print("Error getting location name from coordinates: $e");
+    }
+    return fallbackName;
+  }
+
   @override
   Widget build(BuildContext context) {
     // Get the current theme from provider
@@ -1899,8 +2087,11 @@ class _MapPageState extends State<MapPage> {
           Row(
             children: [
               Icon(
-                isDarkMode ? Icons.nightlight_round : Icons.wb_sunny,
+                isDarkMode
+                    ? CupertinoIcons.moon_fill
+                    : CupertinoIcons.sun_max_fill,
                 color: isDarkMode ? Colors.white : Colors.black,
+                size: 24,
               ),
               Switch(
                 value: isDarkMode,
@@ -1937,11 +2128,31 @@ class _MapPageState extends State<MapPage> {
                 await getLatLngFromAddress(end, _currentLocation);
 
             if (origin != null && destination != null) {
+              // Resolve actual location names for "Your location" cases
+              String actualStartName = start;
+              String actualEndName = end;
+
+              // If start is "Your location" or similar, get actual location name
+              if (start.toLowerCase().contains("your location") ||
+                  start.toLowerCase().contains("current location")) {
+                actualStartName =
+                    await _getLocationNameFromCoordinates(origin, start);
+              }
+
+              // If end is "Your location" or similar, get actual location name
+              if (end.toLowerCase().contains("your location") ||
+                  end.toLowerCase().contains("current location")) {
+                actualEndName =
+                    await _getLocationNameFromCoordinates(destination, end);
+              }
+
               setState(() {
                 _routeOptions = [];
                 _isRouteLoading = true;
               });
-              await _loadRoute(origin, destination, travelMode);
+              await _loadRoute(origin, destination, travelMode,
+                  startLocationName: actualStartName,
+                  endLocationName: actualEndName);
             }
           },
           selectedRouteIndex: _userSelectedRouteIndex,
@@ -2030,8 +2241,12 @@ class _MapPageState extends State<MapPage> {
                     }
                   });
                 },
+                onToggleMockStations: _toggleMockStations,
                 isProgressVisible: _showRouteProgress,
                 alertsEnabled: _showNotification,
+                hasMockStations: _allStations.any((station) =>
+                    station["station_id"] == "mock_001" ||
+                    station["station_id"] == "mock_002"),
                 hasActiveRoute:
                     _routeOptions.isNotEmpty && _userSelectedRouteIndex >= 0,
                 isDarkMode: isDarkMode,

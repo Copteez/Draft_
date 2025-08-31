@@ -5,14 +5,13 @@ import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'config.dart';
 import 'MapSelectionPage.dart';
 import 'theme_provider.dart';
 import 'network_service.dart';
-import 'config.dart';
 
 class AddFavoritePathPage extends StatefulWidget {
-  final AppConfig config;
+  final Config config;
 
   const AddFavoritePathPage({Key? key, required this.config}) : super(key: key);
 
@@ -23,26 +22,13 @@ class AddFavoritePathPage extends StatefulWidget {
 class _AddFavoritePathPageState extends State<AddFavoritePathPage> {
   final TextEditingController startController = TextEditingController();
   final TextEditingController endController = TextEditingController();
-  late NetworkService networkService;
 
   List<dynamic> _startSuggestions = [];
   List<dynamic> _endSuggestions = [];
   LatLng? _startLatLng;
   LatLng? _endLatLng;
-
-  @override
-  void initState() {
-    super.initState();
-    // Initialize network service using the proper config
-    networkService = NetworkService(config: widget.config);
-
-    // Debug: Print config details
-    print("🔧 Config loaded:");
-    print("   ngrok: ${widget.config.ngrok}");
-    print("   zerotier: ${widget.config.zerotier}");
-    print(
-        "   googleApiKey: ${widget.config.googleApiKey.isNotEmpty ? 'Set' : 'Not set'}");
-  }
+  bool _isSearchingStart = false;
+  bool _isSearchingEnd = false;
 
   @override
   void dispose() {
@@ -72,56 +58,12 @@ class _AddFavoritePathPageState extends State<AddFavoritePathPage> {
     }
 
     try {
-      // Get user_id from SharedPreferences like other parts of the app
-      final prefs = await SharedPreferences.getInstance();
-      final userId = prefs.getInt('user_id');
-
-      if (userId == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Please log in to save favorite paths"),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
-
-      // Show loading indicator
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Row(
-            children: [
-              SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                ),
-              ),
-              SizedBox(width: 16),
-              Text("Saving favorite path..."),
-            ],
-          ),
-          duration: Duration(seconds: 30),
-        ),
-      );
-
-      final effectiveBaseUrl = await networkService.getEffectiveBaseUrl();
-      final String apiUrl = "$effectiveBaseUrl/api/favorite-paths";
-
-      // Debug logging
-      print("🌐 Using base URL: $effectiveBaseUrl");
-      print("📍 Full API URL: $apiUrl");
-      print("👤 Using user_id: $userId");
-      print(
-          "📤 Sending data: start=${startController.text}, end=${endController.text}");
-
+      const String apiUrl = "http://192.168.1.104:5000/api/favorite-paths";
       final response = await http.post(
         Uri.parse(apiUrl),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          'user_id': userId, // Use the actual user_id from SharedPreferences
+          'user_id': 1, // Default user ID - you can make this dynamic later
           'start_location': startController.text,
           'end_location': endController.text,
           'start_lat': _startLatLng!.latitude,
@@ -131,57 +73,20 @@ class _AddFavoritePathPageState extends State<AddFavoritePathPage> {
         }),
       );
 
-      // Hide loading indicator
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-      print("📊 Response status: ${response.statusCode}");
-      print("📊 Response body: ${response.body}");
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
+      if (response.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Row(
-              children: [
-                Icon(Icons.check_circle, color: Colors.white),
-                SizedBox(width: 16),
-                Text("Favorite path saved successfully"),
-              ],
-            ),
-            backgroundColor: Colors.green,
-          ),
+          const SnackBar(content: Text("Favorite path saved successfully")),
         );
         Navigator.pop(context);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                const Icon(Icons.error, color: Colors.white),
-                const SizedBox(width: 16),
-                Text("Failed to save: Server returned ${response.statusCode}"),
-              ],
-            ),
-            backgroundColor: Colors.red,
-          ),
+          const SnackBar(content: Text("Failed to save favorite path")),
         );
       }
     } catch (e) {
-      // Hide loading indicator
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
       print("Error saving favorite path: $e");
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const Icon(Icons.error, color: Colors.white),
-              const SizedBox(width: 16),
-              Text("Error: ${e.toString()}"),
-            ],
-          ),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 5),
-        ),
+        const SnackBar(content: Text("Error saving favorite path")),
       );
     }
   }
@@ -209,8 +114,8 @@ class _AddFavoritePathPageState extends State<AddFavoritePathPage> {
             children: [
               Icon(
                 isDarkMode
-                    ? CupertinoIcons.moon_fill
-                    : CupertinoIcons.sun_max_fill,
+                    ? CupertinoIcons.sun_max_fill
+                    : CupertinoIcons.moon_fill,
                 color: isDarkMode ? Colors.white : Colors.black,
                 size: 18,
               ),
@@ -218,7 +123,7 @@ class _AddFavoritePathPageState extends State<AddFavoritePathPage> {
               Switch(
                 value: isDarkMode,
                 onChanged: (value) {
-                  themeProvider.toggleTheme(value);
+                  themeProvider.toggleTheme();
                 },
                 activeColor: Colors.orange,
                 inactiveThumbColor: Colors.grey,
@@ -337,31 +242,13 @@ class _AddFavoritePathPageState extends State<AddFavoritePathPage> {
                           contentPadding: const EdgeInsets.all(16),
                           prefixIcon: Icon(
                             Icons.search,
-                            color:
-                                isDarkMode ? Colors.white70 : Colors.grey[700],
+                            color: isDarkMode
+                                ? Colors.grey[400]
+                                : Colors.grey[600],
                           ),
-                          suffixIcon: startController.text.isNotEmpty
-                              ? IconButton(
-                                  icon: Icon(
-                                    Icons.clear,
-                                    color: isDarkMode
-                                        ? Colors.white70
-                                        : Colors.grey[700],
-                                  ),
-                                  onPressed: () {
-                                    setState(() {
-                                      startController.clear();
-                                      _startLatLng = null;
-                                      _startSuggestions = [];
-                                    });
-                                  },
-                                )
-                              : null,
                         ),
                         onChanged: (value) {
                           _fetchStartSuggestions(value);
-                          setState(
-                              () {}); // Trigger rebuild to show/hide clear button
                         },
                       ),
                     ),
@@ -435,13 +322,10 @@ class _AddFavoritePathPageState extends State<AddFavoritePathPage> {
                                 });
                               }
                             },
-                            icon: const Icon(Icons.map,
-                                size: 18, color: Colors.white),
+                            icon: const Icon(Icons.map, size: 18),
                             label: const Text(
                               "From Map",
-                              style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.white),
+                              style: TextStyle(fontWeight: FontWeight.w600),
                             ),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.orange,
@@ -457,13 +341,10 @@ class _AddFavoritePathPageState extends State<AddFavoritePathPage> {
                         Expanded(
                           child: ElevatedButton.icon(
                             onPressed: () => _setCurrentLocation(true),
-                            icon: const Icon(Icons.my_location,
-                                size: 18, color: Colors.white),
+                            icon: const Icon(Icons.my_location, size: 18),
                             label: const Text(
                               "Current",
-                              style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.white),
+                              style: TextStyle(fontWeight: FontWeight.w600),
                             ),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.green,
@@ -566,31 +447,13 @@ class _AddFavoritePathPageState extends State<AddFavoritePathPage> {
                           contentPadding: const EdgeInsets.all(16),
                           prefixIcon: Icon(
                             Icons.search,
-                            color:
-                                isDarkMode ? Colors.white70 : Colors.grey[700],
+                            color: isDarkMode
+                                ? Colors.grey[400]
+                                : Colors.grey[600],
                           ),
-                          suffixIcon: endController.text.isNotEmpty
-                              ? IconButton(
-                                  icon: Icon(
-                                    Icons.clear,
-                                    color: isDarkMode
-                                        ? Colors.white70
-                                        : Colors.grey[700],
-                                  ),
-                                  onPressed: () {
-                                    setState(() {
-                                      endController.clear();
-                                      _endLatLng = null;
-                                      _endSuggestions = [];
-                                    });
-                                  },
-                                )
-                              : null,
                         ),
                         onChanged: (value) {
                           _fetchEndSuggestions(value);
-                          setState(
-                              () {}); // Trigger rebuild to show/hide clear button
                         },
                       ),
                     ),
@@ -664,13 +527,10 @@ class _AddFavoritePathPageState extends State<AddFavoritePathPage> {
                                 });
                               }
                             },
-                            icon: const Icon(Icons.map,
-                                size: 18, color: Colors.white),
+                            icon: const Icon(Icons.map, size: 18),
                             label: const Text(
                               "From Map",
-                              style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.white),
+                              style: TextStyle(fontWeight: FontWeight.w600),
                             ),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.orange,
@@ -686,13 +546,10 @@ class _AddFavoritePathPageState extends State<AddFavoritePathPage> {
                         Expanded(
                           child: ElevatedButton.icon(
                             onPressed: () => _setCurrentLocation(false),
-                            icon: const Icon(Icons.my_location,
-                                size: 18, color: Colors.white),
+                            icon: const Icon(Icons.my_location, size: 18),
                             label: const Text(
                               "Current",
-                              style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.white),
+                              style: TextStyle(fontWeight: FontWeight.w600),
                             ),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.green,
@@ -720,13 +577,12 @@ class _AddFavoritePathPageState extends State<AddFavoritePathPage> {
                 onPressed: () async {
                   await _saveFavoritePath();
                 },
-                icon: const Icon(Icons.favorite, size: 24, color: Colors.white),
+                icon: const Icon(Icons.favorite, size: 24),
                 label: const Text(
                   "Save Favorite Route",
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
-                    color: Colors.white,
                   ),
                 ),
                 style: ElevatedButton.styleFrom(
@@ -772,6 +628,7 @@ class _AddFavoritePathPageState extends State<AddFavoritePathPage> {
         final data = jsonDecode(response.body);
         setState(() {
           _startSuggestions = data['predictions'] ?? [];
+          _isSearchingStart = true;
         });
       }
     } catch (e) {
@@ -801,6 +658,7 @@ class _AddFavoritePathPageState extends State<AddFavoritePathPage> {
         final data = jsonDecode(response.body);
         setState(() {
           _endSuggestions = data['predictions'] ?? [];
+          _isSearchingEnd = true;
         });
       }
     } catch (e) {
@@ -851,6 +709,7 @@ class _AddFavoritePathPageState extends State<AddFavoritePathPage> {
           startController.text = name;
           _startLatLng = LatLng(loc['lat'], loc['lng']);
           _startSuggestions = [];
+          _isSearchingStart = false;
         });
       }
     } catch (e) {
@@ -879,6 +738,7 @@ class _AddFavoritePathPageState extends State<AddFavoritePathPage> {
           endController.text = name;
           _endLatLng = LatLng(loc['lat'], loc['lng']);
           _endSuggestions = [];
+          _isSearchingEnd = false;
         });
       }
     } catch (e) {

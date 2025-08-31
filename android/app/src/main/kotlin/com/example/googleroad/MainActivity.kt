@@ -92,11 +92,10 @@ class NotificationPlugin(private val context: Context) : FlutterPlugin, MethodCa
                     val aqi = call.argument<Int>("aqi") ?: 0
                     val aqiLevel = call.argument<String>("aqiLevel") ?: "Unknown"
                     
-                    // Get the new time and distance parameters
-                    val timeToWorstZone = call.argument<String>("timeToWorstZone")
-                    val distanceToWorstZone = call.argument<String>("distanceToWorstZone")
+                    // Get the new zone message parameter
+                    val zoneMessage = call.argument<String>("zoneMessage")
                     
-                    showNotification(stationName, progress, aqi, aqiLevel, timeToWorstZone, distanceToWorstZone)
+                    showNotification(stationName, progress, aqi, aqiLevel, zoneMessage)
                     result.success(true)
                 }
                 "hideRouteProgressNotification" -> {
@@ -118,14 +117,12 @@ class NotificationPlugin(private val context: Context) : FlutterPlugin, MethodCa
         progress: Int, 
         aqi: Int, 
         aqiLevel: String, 
-        timeToWorstZone: String?, 
-        distanceToWorstZone: String?
+        zoneMessage: String?
     ) {
         try {
-            // Prepare notification text with additional info if available
-            val bigText = if (timeToWorstZone != null && distanceToWorstZone != null) {
-                "You are near $stationName ($progress%)\nAQI: $aqi - $aqiLevel\n" +
-                "Highest pollution zone in $timeToWorstZone ($distanceToWorstZone ahead)"
+            // Prepare notification text with zone message if available
+            val bigText = if (zoneMessage != null) {
+                "You are near $stationName ($progress%)\nAQI: $aqi - $aqiLevel\n$zoneMessage"
             } else {
                 "You are near $stationName ($progress%)\nAQI: $aqi - $aqiLevel"
             }

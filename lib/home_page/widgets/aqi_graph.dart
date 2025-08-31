@@ -15,6 +15,7 @@ Widget buildAQIGraph({
   required String forecastText,
   required VoidCallback onToggleHistoryMode,
   required Function(String) onHistoryViewChange,
+  List<String>? forecastTimestamps, // Add optional timestamps
 }) {
   return Container(
     padding: const EdgeInsets.all(20),
@@ -69,7 +70,8 @@ Widget buildAQIGraph({
                 selectedHistoryView: selectedHistoryView,
                 onHistoryViewChange: onHistoryViewChange,
               )
-            : _buildForecastGraph(context, aqiData, isDarkMode, forecastText),
+            : _buildForecastGraph(
+                context, aqiData, isDarkMode, forecastText, forecastTimestamps),
       ],
     ),
   );
@@ -77,12 +79,11 @@ Widget buildAQIGraph({
 
 /// ฟังก์ชันสำหรับสร้างกราฟ Forecast (24 Hours)
 Widget _buildForecastGraph(BuildContext context, List<FlSpot> aqiData,
-    bool isDarkMode, String forecastText) {
+    bool isDarkMode, String forecastText, List<String>? timestamps) {
   double maxY = aqiData.isNotEmpty
       ? aqiData.map((spot) => spot.y).reduce((a, b) => a > b ? a : b)
       : 300;
   maxY = ((maxY + 50) / 50).ceil() * 50.0;
-  DateTime now = DateTime.now();
 
   // คำนวณความกว้างของกราฟ: หากหน้าจอกว้างกว่าขนาดกราฟที่คำนวณได้ ให้ยืดออกจนพอดี
   double computedWidth = aqiData.isNotEmpty ? (aqiData.last.x + 2) * 40 : 300;
@@ -123,8 +124,30 @@ Widget _buildForecastGraph(BuildContext context, List<FlSpot> aqiData,
                   getTitles: (value) {
                     int index = value.toInt();
                     if (index < 0 || index >= aqiData.length) return '';
-                    DateTime timeLabel = now.add(Duration(hours: index));
-                    String formattedTime = "${timeLabel.hour}:00";
+
+                    String formattedTime = "00:00";
+
+                    // Use server timestamps if available
+                    if (timestamps != null && index < timestamps.length) {
+                      try {
+                        DateTime serverTime = DateTime.parse(timestamps[index]);
+                        formattedTime =
+                            "${serverTime.hour.toString().padLeft(2, '0')}:00";
+                      } catch (e) {
+                        // Fallback to index-based time if parsing fails
+                        DateTime fallbackTime =
+                            DateTime.now().add(Duration(hours: index));
+                        formattedTime =
+                            "${fallbackTime.hour.toString().padLeft(2, '0')}:00";
+                      }
+                    } else {
+                      // Fallback to current time + index hours
+                      DateTime fallbackTime =
+                          DateTime.now().add(Duration(hours: index));
+                      formattedTime =
+                          "${fallbackTime.hour.toString().padLeft(2, '0')}:00";
+                    }
+
                     int aqiValue = aqiData[index].y.toInt();
                     return "$formattedTime\nAQI\n$aqiValue";
                   },

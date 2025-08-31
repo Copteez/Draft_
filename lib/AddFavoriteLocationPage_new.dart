@@ -5,11 +5,9 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'MapSelectionPage.dart';
 import 'theme_provider.dart';
-import 'network_service.dart';
-import 'config.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class FavoriteLocation {
   final int id;
@@ -30,8 +28,8 @@ class FavoriteLocation {
 }
 
 class AddFavoriteLocationPage extends StatefulWidget {
-  final AppConfig config;
-  const AddFavoriteLocationPage({Key? key, required this.config})
+  final String googleApiKey;
+  const AddFavoriteLocationPage({Key? key, required this.googleApiKey})
       : super(key: key);
 
   @override
@@ -43,14 +41,6 @@ class _AddFavoriteLocationPageState extends State<AddFavoriteLocationPage> {
   final TextEditingController locationController = TextEditingController();
   List<dynamic> _suggestions = [];
   LatLng? _selectedLatLng;
-  late NetworkService networkService;
-
-  @override
-  void initState() {
-    super.initState();
-    // Initialize network service using the proper config
-    networkService = NetworkService(config: widget.config);
-  }
 
   @override
   void dispose() {
@@ -70,7 +60,7 @@ class _AddFavoriteLocationPageState extends State<AddFavoriteLocationPage> {
       '/maps/api/place/autocomplete/json',
       {
         'input': input,
-        'key': widget.config.googleApiKey,
+        'key': widget.googleApiKey,
         'components': 'country:th',
       },
     );
@@ -92,11 +82,7 @@ class _AddFavoriteLocationPageState extends State<AddFavoriteLocationPage> {
     final url = Uri.https(
       'maps.googleapis.com',
       '/maps/api/place/details/json',
-      {
-        'place_id': placeId,
-        'key': widget.config.googleApiKey,
-        'fields': 'geometry'
-      },
+      {'place_id': placeId, 'key': widget.googleApiKey, 'fields': 'geometry'},
     );
     try {
       final response = await http.get(url);
@@ -117,139 +103,25 @@ class _AddFavoriteLocationPageState extends State<AddFavoriteLocationPage> {
   Future<void> _saveFavoriteLocation() async {
     if (locationController.text.isEmpty || _selectedLatLng == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Row(
-            children: [
-              Icon(Icons.warning, color: Colors.white),
-              SizedBox(width: 16),
-              Text("Please select a location"),
-            ],
-          ),
-          backgroundColor: Colors.orange,
-        ),
+        const SnackBar(content: Text("Please select a location")),
       );
       return;
     }
 
-    try {
-      // Get user_id from SharedPreferences like other parts of the app
-      final prefs = await SharedPreferences.getInstance();
-      final userId = prefs.getInt('user_id');
+    // Simplified save - just return the location
+    final newFav = FavoriteLocation(
+      id: DateTime.now().millisecondsSinceEpoch,
+      locationName: locationController.text,
+      lat: _selectedLatLng!.latitude,
+      lon: _selectedLatLng!.longitude,
+      timestamp: DateFormat("dd/MM/yyyy HH:mm").format(DateTime.now()),
+      aqi: 0,
+    );
 
-      if (userId == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Please log in to save favorite locations"),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
-
-      // Show loading indicator
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Row(
-            children: [
-              SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                ),
-              ),
-              SizedBox(width: 16),
-              Text("Saving favorite location..."),
-            ],
-          ),
-          duration: Duration(seconds: 30),
-        ),
-      );
-
-      final effectiveBaseUrl = await networkService.getEffectiveBaseUrl();
-      final String apiUrl = "$effectiveBaseUrl/api/favorite-locations";
-
-      // Debug logging
-      print("🌐 Using base URL: $effectiveBaseUrl");
-      print("📍 Full API URL: $apiUrl");
-      print("👤 Using user_id: $userId");
-      print("📤 Sending data: location=${locationController.text}");
-
-      final response = await http.post(
-        Uri.parse(apiUrl),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'user_id': userId, // Use the actual user_id from SharedPreferences
-          'location_name': locationController.text,
-          'latitude': _selectedLatLng!.latitude,
-          'longitude': _selectedLatLng!.longitude,
-        }),
-      );
-
-      // Hide loading indicator
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-      print("📊 Response status: ${response.statusCode}");
-      print("📊 Response body: ${response.body}");
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        // Create the favorite location for local use
-        final newFav = FavoriteLocation(
-          id: DateTime.now().millisecondsSinceEpoch,
-          locationName: locationController.text,
-          lat: _selectedLatLng!.latitude,
-          lon: _selectedLatLng!.longitude,
-          timestamp: DateFormat("dd/MM/yyyy HH:mm").format(DateTime.now()),
-          aqi: 0,
-        );
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Row(
-              children: [
-                Icon(Icons.check_circle, color: Colors.white),
-                SizedBox(width: 16),
-                Text("Favorite location saved successfully"),
-              ],
-            ),
-            backgroundColor: Colors.green,
-          ),
-        );
-        Navigator.pop(context, newFav);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                const Icon(Icons.error, color: Colors.white),
-                const SizedBox(width: 16),
-                Text("Failed to save: Server returned ${response.statusCode}"),
-              ],
-            ),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } catch (e) {
-      // Hide loading indicator
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-      print("Error saving favorite location: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const Icon(Icons.error, color: Colors.white),
-              const SizedBox(width: 16),
-              Text("Error: ${e.toString()}"),
-            ],
-          ),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 5),
-        ),
-      );
-    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Favorite location saved successfully")),
+    );
+    Navigator.pop(context, newFav);
   }
 
   @override
@@ -275,8 +147,8 @@ class _AddFavoriteLocationPageState extends State<AddFavoriteLocationPage> {
             children: [
               Icon(
                 isDarkMode
-                    ? CupertinoIcons.moon_fill
-                    : CupertinoIcons.sun_max_fill,
+                    ? CupertinoIcons.sun_max_fill
+                    : CupertinoIcons.moon_fill,
                 color: isDarkMode ? Colors.white : Colors.black,
                 size: 18,
               ),
@@ -403,31 +275,13 @@ class _AddFavoriteLocationPageState extends State<AddFavoriteLocationPage> {
                           contentPadding: const EdgeInsets.all(16),
                           prefixIcon: Icon(
                             Icons.search,
-                            color:
-                                isDarkMode ? Colors.white70 : Colors.grey[700],
+                            color: isDarkMode
+                                ? Colors.grey[400]
+                                : Colors.grey[600],
                           ),
-                          suffixIcon: locationController.text.isNotEmpty
-                              ? IconButton(
-                                  icon: Icon(
-                                    Icons.clear,
-                                    color: isDarkMode
-                                        ? Colors.white70
-                                        : Colors.grey[700],
-                                  ),
-                                  onPressed: () {
-                                    setState(() {
-                                      locationController.clear();
-                                      _selectedLatLng = null;
-                                      _suggestions = [];
-                                    });
-                                  },
-                                )
-                              : null,
                         ),
                         onChanged: (value) {
                           _fetchSuggestions(value);
-                          setState(
-                              () {}); // Trigger rebuild to show/hide clear button
                         },
                       ),
                     ),
@@ -493,7 +347,7 @@ class _AddFavoriteLocationPageState extends State<AddFavoriteLocationPage> {
                               builder: (context) => MapSelectionPage(
                                 title: "Select Location",
                                 isDarkMode: isDarkMode,
-                                googleApiKey: widget.config.googleApiKey,
+                                googleApiKey: widget.googleApiKey,
                               ),
                             ),
                           );
@@ -505,12 +359,10 @@ class _AddFavoriteLocationPageState extends State<AddFavoriteLocationPage> {
                             });
                           }
                         },
-                        icon: const Icon(Icons.map,
-                            size: 18, color: Colors.white),
+                        icon: const Icon(Icons.map, size: 18),
                         label: const Text(
                           "Select from Map",
-                          style: TextStyle(
-                              fontWeight: FontWeight.w600, color: Colors.white),
+                          style: TextStyle(fontWeight: FontWeight.w600),
                         ),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.orange,
@@ -570,13 +422,12 @@ class _AddFavoriteLocationPageState extends State<AddFavoriteLocationPage> {
                 onPressed: () async {
                   await _saveFavoriteLocation();
                 },
-                icon: const Icon(Icons.favorite, size: 24, color: Colors.white),
+                icon: const Icon(Icons.favorite, size: 24),
                 label: const Text(
                   "Save Favorite Location",
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
-                    color: Colors.white,
                   ),
                 ),
                 style: ElevatedButton.styleFrom(

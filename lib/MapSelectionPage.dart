@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
+import 'map/map_theme.dart';
 
 class MapSelectionPage extends StatefulWidget {
   final String title;
@@ -138,15 +139,70 @@ class _MapSelectionPageState extends State<MapSelectionPage> {
                 CameraPosition(target: _initialPosition, zoom: 14),
             onMapCreated: (controller) {
               _mapController = controller;
+              // Apply dark/light map theme based on theme setting
+              _mapController!.setMapStyle(
+                  widget.isDarkMode ? darkMapStyle : lightMapStyle);
             },
             onTap: (position) async {
-              // เมื่อผู้ใช้แตะแผนที่ ให้ reverse geocode และส่งค่ากลับ
+              // Get location name before showing confirmation dialog
               final placeName = await _getPlaceNameFromCoordinates(position);
-              Navigator.pop(context, {
-                "name": placeName,
-                "lat": position.latitude,
-                "lng": position.longitude,
-              });
+
+              // Show confirmation dialog with location name
+              final confirmed = await showDialog<bool>(
+                context: context,
+                builder: (BuildContext context) {
+                  return AlertDialog(
+                    backgroundColor: widget.isDarkMode
+                        ? const Color(0xFF3C4055)
+                        : Colors.white,
+                    title: Text(
+                      "Confirm Location",
+                      style: TextStyle(
+                        color: widget.isDarkMode ? Colors.white : Colors.black,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    content: Text(
+                      "Are you sure you want to select this location?\n\n📍 $placeName\n\nLatitude: ${position.latitude.toStringAsFixed(6)}\nLongitude: ${position.longitude.toStringAsFixed(6)}",
+                      style: TextStyle(
+                        color: widget.isDarkMode
+                            ? Colors.grey[300]
+                            : Colors.grey[700],
+                      ),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(false),
+                        child: Text(
+                          "Cancel",
+                          style: TextStyle(
+                            color: widget.isDarkMode
+                                ? Colors.grey[400]
+                                : Colors.grey[600],
+                          ),
+                        ),
+                      ),
+                      ElevatedButton(
+                        onPressed: () => Navigator.of(context).pop(true),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.orange,
+                          foregroundColor: Colors.white,
+                        ),
+                        child: const Text("Confirm"),
+                      ),
+                    ],
+                  );
+                },
+              );
+
+              if (confirmed == true) {
+                // User confirmed, return with location data
+                Navigator.pop(context, {
+                  "name": placeName,
+                  "lat": position.latitude,
+                  "lng": position.longitude,
+                });
+              }
             },
             markers: _selectedPosition != null
                 ? {
@@ -211,11 +267,65 @@ class _MapSelectionPageState extends State<MapSelectionPage> {
                             final details =
                                 await _getPlaceDetails(suggestion['place_id']);
                             if (details != null) {
-                              Navigator.pop(context, {
-                                "name": details['name'],
-                                "lat": details['geometry']['location']['lat'],
-                                "lng": details['geometry']['location']['lng'],
-                              });
+                              // Show confirmation dialog with location name
+                              final confirmed = await showDialog<bool>(
+                                context: context,
+                                builder: (BuildContext context) {
+                                  return AlertDialog(
+                                    backgroundColor: widget.isDarkMode
+                                        ? const Color(0xFF3C4055)
+                                        : Colors.white,
+                                    title: Text(
+                                      "Confirm Location",
+                                      style: TextStyle(
+                                        color: widget.isDarkMode
+                                            ? Colors.white
+                                            : Colors.black,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    content: Text(
+                                      "Are you sure you want to select this location?\n\n📍 ${details['name']}\n\nLatitude: ${details['geometry']['location']['lat'].toStringAsFixed(6)}\nLongitude: ${details['geometry']['location']['lng'].toStringAsFixed(6)}",
+                                      style: TextStyle(
+                                        color: widget.isDarkMode
+                                            ? Colors.grey[300]
+                                            : Colors.grey[700],
+                                      ),
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.of(context).pop(false),
+                                        child: Text(
+                                          "Cancel",
+                                          style: TextStyle(
+                                            color: widget.isDarkMode
+                                                ? Colors.grey[400]
+                                                : Colors.grey[600],
+                                          ),
+                                        ),
+                                      ),
+                                      ElevatedButton(
+                                        onPressed: () =>
+                                            Navigator.of(context).pop(true),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.orange,
+                                          foregroundColor: Colors.white,
+                                        ),
+                                        child: const Text("Confirm"),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              );
+
+                              if (confirmed == true) {
+                                Navigator.pop(context, {
+                                  "name": details['name'],
+                                  "lat": details['geometry']['location']['lat'],
+                                  "lng": details['geometry']['location']['lng'],
+                                });
+                              }
                             }
                           },
                         );
@@ -231,13 +341,65 @@ class _MapSelectionPageState extends State<MapSelectionPage> {
       floatingActionButton: FloatingActionButton(
         onPressed: () async {
           if (_selectedPosition != null) {
+            // Get location name before showing confirmation dialog
             final placeName =
                 await _getPlaceNameFromCoordinates(_selectedPosition!);
-            Navigator.pop(context, {
-              "name": placeName,
-              "lat": _selectedPosition!.latitude,
-              "lng": _selectedPosition!.longitude,
-            });
+
+            // Show confirmation dialog with location name
+            final confirmed = await showDialog<bool>(
+              context: context,
+              builder: (BuildContext context) {
+                return AlertDialog(
+                  backgroundColor: widget.isDarkMode
+                      ? const Color(0xFF3C4055)
+                      : Colors.white,
+                  title: Text(
+                    "Confirm Location",
+                    style: TextStyle(
+                      color: widget.isDarkMode ? Colors.white : Colors.black,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  content: Text(
+                    "Are you sure you want to confirm this location?\n\n📍 $placeName\n\nLatitude: ${_selectedPosition!.latitude.toStringAsFixed(6)}\nLongitude: ${_selectedPosition!.longitude.toStringAsFixed(6)}",
+                    style: TextStyle(
+                      color: widget.isDarkMode
+                          ? Colors.grey[300]
+                          : Colors.grey[700],
+                    ),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(false),
+                      child: Text(
+                        "Cancel",
+                        style: TextStyle(
+                          color: widget.isDarkMode
+                              ? Colors.grey[400]
+                              : Colors.grey[600],
+                        ),
+                      ),
+                    ),
+                    ElevatedButton(
+                      onPressed: () => Navigator.of(context).pop(true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text("Confirm"),
+                    ),
+                  ],
+                );
+              },
+            );
+
+            if (confirmed == true) {
+              Navigator.pop(context, {
+                "name": placeName,
+                "lat": _selectedPosition!.latitude,
+                "lng": _selectedPosition!.longitude,
+              });
+            }
           } else {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text("Please select a location")),

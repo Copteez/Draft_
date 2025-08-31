@@ -3,6 +3,7 @@ import 'package:provider/provider.dart'; // Add this import
 import 'package:fl_chart/fl_chart.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:convert';
+import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
@@ -48,11 +49,17 @@ class _DetailsPageState extends State<DetailsPage> {
   List<String> _historyLabels = [];
   String _forecastText = "Loading...";
   double _highestAQI = 0.0;
+  List<String> _forecastTimestamps = []; // Add timestamps for forecast
 
   // Add prediction-related properties
   List<Map<String, dynamic>> _predictions = [];
   bool _isLoadingPredictions = false;
   String? _predictionError;
+
+  // Add timer for auto-refresh
+  Timer? _refreshTimer;
+  static const Duration _refreshInterval =
+      Duration(minutes: 5); // Refresh every 5 minutes
 
   late final NetworkService networkService;
 
@@ -62,8 +69,83 @@ class _DetailsPageState extends State<DetailsPage> {
     networkService = NetworkService(config: widget.config);
     // กำหนด station จาก parameter ที่รับมาจาก previous page
     _selectedStation = widget.station;
-    _lastUpdated = widget.station["timestamp"] ?? "Unknown Time";
+    _lastUpdated = _formatTimestamp(widget.station["timestamp"]);
     _initializeData();
+    _startAutoRefresh();
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startAutoRefresh() {
+    _refreshTimer = Timer.periodic(_refreshInterval, (timer) {
+      if (mounted) {
+        _refreshStationData();
+      }
+    });
+  }
+
+  void _refreshStationData() async {
+    // Refresh station data by re-fetching from server
+    await _fetchUpdatedStationData();
+    _loadAQIData();
+    if (_isHistoryMode) {
+      await _fetchHistoryData();
+    }
+  }
+
+  Future<void> _fetchUpdatedStationData() async {
+    // Get the current station's coordinates
+    double? stationLat;
+    double? stationLon;
+
+    if (_selectedStation != null) {
+      if (_selectedStation!.containsKey("lat") &&
+          _selectedStation!.containsKey("lon")) {
+        stationLat = double.tryParse(_selectedStation!["lat"].toString());
+        stationLon = double.tryParse(_selectedStation!["lon"].toString());
+      } else if (_selectedStation!.containsKey("lat_lon")) {
+        List<String> parts = _selectedStation!["lat_lon"].toString().split(",");
+        if (parts.length == 2) {
+          stationLat = double.tryParse(parts[0]);
+          stationLon = double.tryParse(parts[1]);
+        }
+      }
+    }
+
+    if (stationLat != null && stationLon != null) {
+      final effectiveBaseUrl = await networkService.getEffectiveBaseUrl();
+      final url = "$effectiveBaseUrl/api/nearest-station-aqi";
+      final body = jsonEncode({
+        "latitude": stationLat,
+        "longitude": stationLon,
+      });
+
+      try {
+        final response = await http.post(
+          Uri.parse(url),
+          headers: {"Content-Type": "application/json"},
+          body: body,
+        );
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          if (data["success"] == true) {
+            setState(() {
+              _selectedStation = data["nearest_station"];
+              _lastUpdated =
+                  _formatTimestamp(data["nearest_station"]["timestamp"]);
+            });
+          }
+        }
+      } catch (e) {
+        // Handle error silently for auto-refresh
+        print("Auto-refresh error: $e");
+      }
+    }
   }
 
   Future<void> _initializeData() async {
@@ -102,20 +184,23 @@ class _DetailsPageState extends State<DetailsPage> {
         location: 'current',
         stationId: stationId, // Use station ID when available
         config: widget.config,
-        onDataGenerated:
-            (List<FlSpot> aqiData, String forecastText, double highestAQI) {
+        onDataGenerated: (List<FlSpot> aqiData, String forecastText,
+            double highestAQI, List<String> timestamps) {
           setState(() {
             _aqiData = aqiData;
             _forecastText = forecastText;
             _highestAQI = highestAQI;
+            _forecastTimestamps = timestamps;
             _isLoading = false;
 
             // Create predictions list from the same data
             _predictions = [];
             for (int i = 0; i < aqiData.length; i++) {
-              final DateTime timestamp = DateTime.now().add(Duration(hours: i));
+              final String timestamp = i < timestamps.length
+                  ? timestamps[i]
+                  : DateTime.now().add(Duration(hours: i)).toIso8601String();
               _predictions.add({
-                'timestamp': timestamp.toIso8601String(),
+                'timestamp': timestamp,
                 'aqi': aqiData[i].y.toInt(),
               });
             }
@@ -136,20 +221,23 @@ class _DetailsPageState extends State<DetailsPage> {
       getAQIPredictionData(
         location: 'current',
         config: widget.config,
-        onDataGenerated:
-            (List<FlSpot> aqiData, String forecastText, double highestAQI) {
+        onDataGenerated: (List<FlSpot> aqiData, String forecastText,
+            double highestAQI, List<String> timestamps) {
           setState(() {
             _aqiData = aqiData;
             _forecastText = forecastText;
             _highestAQI = highestAQI;
+            _forecastTimestamps = timestamps;
             _isLoading = false;
 
             // Create predictions list from the same data
             _predictions = [];
             for (int i = 0; i < aqiData.length; i++) {
-              final DateTime timestamp = DateTime.now().add(Duration(hours: i));
+              final String timestamp = i < timestamps.length
+                  ? timestamps[i]
+                  : DateTime.now().add(Duration(hours: i)).toIso8601String();
               _predictions.add({
-                'timestamp': timestamp.toIso8601String(),
+                'timestamp': timestamp,
                 'aqi': aqiData[i].y.toInt(),
               });
             }
@@ -309,7 +397,7 @@ class _DetailsPageState extends State<DetailsPage> {
               nearestStation: _selectedStation,
               lastUpdated: _lastUpdated,
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
             // กราฟพยากรณ์/ประวัติ AQI
             buildAQIGraph(
               context: context,
@@ -322,6 +410,7 @@ class _DetailsPageState extends State<DetailsPage> {
               forecastText: _forecastText,
               onToggleHistoryMode: _toggleHistoryMode,
               onHistoryViewChange: _handleHistoryViewChange,
+              forecastTimestamps: _forecastTimestamps, // Add timestamps
             ),
             const SizedBox(height: 16),
             // แผนที่แสดง station ที่เลือก
@@ -358,6 +447,28 @@ class _DetailsPageState extends State<DetailsPage> {
         ),
       ),
     );
+  }
+
+  String _formatTimestamp(String? timestamp) {
+    if (timestamp == null) return "Unknown Time";
+
+    try {
+      DateTime dateTime = DateTime.parse(timestamp);
+      DateTime now = DateTime.now();
+      Duration difference = now.difference(dateTime);
+
+      if (difference.inMinutes < 1) {
+        return "Just now";
+      } else if (difference.inMinutes < 60) {
+        return "${difference.inMinutes} minutes ago";
+      } else if (difference.inHours < 24) {
+        return "${difference.inHours} hours ago";
+      } else {
+        return "${difference.inDays} days ago";
+      }
+    } catch (e) {
+      return timestamp;
+    }
   }
 
   double getPollutantNumericValue(dynamic val) {

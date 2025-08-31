@@ -5,6 +5,7 @@ enum MenuAction {
   filterStations,
   toggleProgress,
   toggleAlerts,
+  toggleMockStations,
   reset
 }
 
@@ -14,8 +15,10 @@ class FloatingOptions extends StatefulWidget {
   final VoidCallback onReset;
   final VoidCallback onToggleProgress;
   final VoidCallback onToggleAlerts;
+  final VoidCallback onToggleMockStations;
   final bool isProgressVisible;
   final bool alertsEnabled;
+  final bool hasMockStations;
   final bool hasActiveRoute;
   final bool isDarkMode;
 
@@ -26,8 +29,10 @@ class FloatingOptions extends StatefulWidget {
     required this.onReset,
     required this.onToggleProgress,
     required this.onToggleAlerts,
+    required this.onToggleMockStations,
     required this.isProgressVisible,
     required this.alertsEnabled,
+    required this.hasMockStations,
     required this.hasActiveRoute,
     required this.isDarkMode,
   }) : super(key: key);
@@ -115,6 +120,25 @@ class _FloatingOptionsState extends State<FloatingOptions> {
             ],
           ),
         ),
+        PopupMenuItem<MenuAction>(
+          value: MenuAction.toggleMockStations,
+          child: Row(
+            children: [
+              Icon(
+                  widget.hasMockStations
+                      ? Icons.location_off
+                      : Icons.location_on,
+                  color: Colors.white),
+              const SizedBox(width: 12),
+              Text(
+                widget.hasMockStations
+                    ? 'Hide mock stations'
+                    : 'Show mock stations',
+                style: const TextStyle(color: Colors.white),
+              ),
+            ],
+          ),
+        ),
         const PopupMenuDivider(),
         PopupMenuItem<MenuAction>(
           value: MenuAction.reset,
@@ -141,6 +165,9 @@ class _FloatingOptionsState extends State<FloatingOptions> {
         break;
       case MenuAction.toggleAlerts:
         widget.onToggleAlerts();
+        break;
+      case MenuAction.toggleMockStations:
+        widget.onToggleMockStations();
         break;
       case MenuAction.reset:
         widget.onReset();

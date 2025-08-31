@@ -41,7 +41,7 @@ Widget buildAQICard({
           ),
           const SizedBox(width: 5),
           Text(
-            "Updated 1 hours ago",
+            lastUpdated,
             style: TextStyle(
               color: isDarkMode ? Colors.white70 : Colors.black54,
             ),

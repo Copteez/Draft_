@@ -309,18 +309,10 @@ class _RouteProgressDisplayState extends State<RouteProgressDisplay>
       );
 
       currentStation = station.stationName;
-
-      // Calculate progress percentage based on user's actual position relative to full route
-      if (widget.totalRouteDistance > 0) {
-        // Use the current station's position as the user's approximate position along the route
-        double userProgressDistance = station.startDistance;
-
-        // Calculate percentage of total route traversed
-        double progressPercentage =
-            userProgressDistance / widget.totalRouteDistance;
-        progress = "${(progressPercentage * 100).toInt()}%";
-      }
     }
+
+    // Use the actual progress percentage passed from the map component
+    progress = "${widget.currentProgress}%";
 
     return Row(
       children: [

@@ -31,8 +31,9 @@ class AndroidNotificationService {
     required String nearestStationName,
     required int progressPercent,
     required int aqi,
-    String? timeToWorstZone,
-    String? distanceToWorstZone,
+    String? timeToTargetZone,
+    String? distanceToTargetZone,
+    String? zoneWarningType,
   }) async {
     if (!Platform.isAndroid) return;
 
@@ -40,14 +41,29 @@ class AndroidNotificationService {
       print(
           "Showing notification: $nearestStationName, $progressPercent%, AQI: $aqi");
 
-      // Add time and distance info to the notification arguments
+      // Prepare zone warning message based on type
+      String? zoneMessage;
+      if (zoneWarningType == "hazard" &&
+          timeToTargetZone != null &&
+          distanceToTargetZone != null) {
+        zoneMessage =
+            "Hazard zone in $timeToTargetZone ($distanceToTargetZone ahead)";
+      } else if (zoneWarningType == "green" &&
+          timeToTargetZone != null &&
+          distanceToTargetZone != null) {
+        zoneMessage =
+            "Green zone in $timeToTargetZone ($distanceToTargetZone ahead)";
+      } else if (zoneWarningType == "no_hazard") {
+        zoneMessage = "No hazard zone in this route";
+      }
+
+      // Add zone message to the notification arguments
       await _channel.invokeMethod('showRouteProgressNotification', {
         'stationName': nearestStationName,
         'progress': progressPercent,
         'aqi': aqi,
         'aqiLevel': _getAqiLevel(aqi),
-        'timeToWorstZone': timeToWorstZone,
-        'distanceToWorstZone': distanceToWorstZone,
+        'zoneMessage': zoneMessage,
       });
     } catch (e) {
       print("Error showing system notification: $e");
@@ -57,7 +73,7 @@ class AndroidNotificationService {
       if (context != null) {
         print("Showing fallback snackbar notification");
         _showSnackbarNotification(context, nearestStationName, progressPercent,
-            aqi, timeToWorstZone, distanceToWorstZone);
+            aqi, zoneWarningType, timeToTargetZone, distanceToTargetZone);
       } else {
         print("No context available for fallback notification");
       }
@@ -69,15 +85,26 @@ class AndroidNotificationService {
       String stationName,
       int progress,
       int aqi,
-      String? timeToWorstZone,
-      String? distanceToWorstZone) {
-    // Create notification text with time and distance info if available
+      String? zoneWarningType,
+      String? timeToTargetZone,
+      String? distanceToTargetZone) {
+    // Create notification text with zone info if available
     String notificationText =
         'Near $stationName ($progress%) - AQI: $aqi (${_getAqiLevel(aqi)})';
 
-    if (timeToWorstZone != null && distanceToWorstZone != null) {
+    // Add zone warning message based on type
+    if (zoneWarningType == "hazard" &&
+        timeToTargetZone != null &&
+        distanceToTargetZone != null) {
       notificationText +=
-          '\nHighest pollution zone in $timeToWorstZone ($distanceToWorstZone ahead)';
+          '\nHazard zone in $timeToTargetZone ($distanceToTargetZone ahead)';
+    } else if (zoneWarningType == "green" &&
+        timeToTargetZone != null &&
+        distanceToTargetZone != null) {
+      notificationText +=
+          '\nGreen zone in $timeToTargetZone ($distanceToTargetZone ahead)';
+    } else if (zoneWarningType == "no_hazard") {
+      notificationText += '\nNo hazard zone in this route';
     }
 
     final snackBar = SnackBar(
